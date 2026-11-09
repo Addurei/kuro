@@ -17,7 +17,8 @@ ACTIONS = {
                 "tone and language. Return only the rewritten text."),
     "fix": ("Fix", "Fix spelling, grammar and punctuation only. Change nothing else. "
             "Return only the corrected text."),
-    "translate": ("Translate", "Translate this into {lang}. Return only the translation."),
+    "translate": ("Translate", "Translate this into {lang}. If it's already in {lang}, "
+                               "translate it into English instead. Return only the translation."),
 }
 REPLACEABLE = {"rewrite", "fix", "translate"}       # results that can be pasted back
 

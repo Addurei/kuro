@@ -104,7 +104,7 @@ class Settings:
     react_activity: bool = True       # props, typing along, the odd comment (app/activity.py)
 
     # safety
-    allow_shell: bool = True          # PowerShell tool exists, always asks first
+    allow_shell: bool = True          # PowerShell tool exists, always asks first (config only)
     search_roots: list = field(default_factory=lambda: [
         str(Path.home() / "Desktop"),
         str(Path.home() / "Documents"),

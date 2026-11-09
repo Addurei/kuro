@@ -1053,14 +1053,10 @@ class SettingsPage(QWidget):
         w, lay = self._page()
         you = Card()
         you.add(_row("Your name", self._edit("user_name", "your name", fallback="friend")))
-
-        lang = Card()
         self.lang_pick = Segmented([("English", "English"), ("Filipino", "Filipino"),
                                     ("Taglish", "Taglish")], self.s.language, small=True)
         self.lang_pick.changed.connect(lambda v: self._set("language", v))
-        lang.add(_row("Kuro speaks", self.lang_pick, "Replies and voice"))
-        lang.add(_row("Translate to", self._edit("translate_to", "English", 110,
-                                                 fallback="English"), "For quick actions"))
+        you.add(_row("Language", self.lang_pick))
 
         kuro = Card()
         self.scale = QSlider(Qt.Horizontal)
@@ -1080,22 +1076,16 @@ class SettingsPage(QWidget):
         self.scale.valueChanged.connect(
             lambda v: None if self.scale.isSliderDown() else self._set("scale", v / 100))
         kuro.add(_row("Size", self.scale))
-        self.size = Segmented([("small", "S"), ("medium", "M"), ("large", "L")],
-                              self.s.chat_size, small=True)
-        self.size.changed.connect(lambda v: self._set("chat_size", v))
-        kuro.add(_row("Chat size", self.size))
-        kuro.add(self._toggle("wander", "Wander", "Teleports around now and then"))
-        kuro.add(self._toggle("dnd_fullscreen", "Hide in fullscreen", "Games and videos"))
-        kuro.add(self._toggle("morning_briefing", "Daily briefing",
-                              "Weather, calendar, reminders"))
+        kuro.add(self._toggle("wander", "Wander around"))
+        kuro.add(self._toggle("dnd_fullscreen", "Hide in fullscreen"))
+        kuro.add(self._toggle("morning_briefing", "Daily briefing"))
 
         priv = Card()
-        priv.add(self._toggle("learn_enabled", "Learn from chats", "Remembers what you tell him"))
-        priv.add(self._toggle("aware", "See the active app", "Only its name and title"))
-        priv.add(self._toggle("react_activity", "React to your work",
-                              "Props, typing along, short comments"))
-        priv.add(self._toggle("suggestions", "Habit suggestions", "Offers apps you often open"))
-        priv.add(self._toggle("allow_shell", "Allow PowerShell", "Always asks first"))
+        priv.add(self._toggle("learn_enabled", "Learn from chats"))
+        notice = Toggle(bool(self.s.aware and self.s.react_activity))
+        notice.toggled.connect(self._set_notice)
+        self.notice_toggle = notice
+        priv.add(_row("Notice what you're doing", notice, "App names only, never contents"))
 
         keys = Card()
         self.hotkey_btns: dict[str, HotkeyButton] = {}
@@ -1106,17 +1096,33 @@ class SettingsPage(QWidget):
             b.capturing.connect(self.hotkey_capture)
             self.hotkey_btns[attr] = b
             keys.add(_row(label, b))
-        self.hotkey_note = QLabel("Click one, then press new keys.")
+        self.hotkey_note = QLabel("")
         self.hotkey_note.setWordWrap(True)
-        self.hotkey_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
+        self.hotkey_note.setVisible(False)
         keys.add(self.hotkey_note)
 
-        for title, card in (("YOU", you), ("LANGUAGE", lang), ("KURO", kuro),
-                            ("PRIVACY", priv), ("SHORTCUTS", keys)):
+        for title, card in (("YOU", you), ("KURO", kuro), ("PRIVACY", priv),
+                            ("SHORTCUTS", keys)):
             lay.addWidget(_section(title))
             lay.addWidget(card)
         lay.addStretch()
         return w
+
+    def _set_notice(self, on: bool) -> None:
+        """One switch for everything that looks at what you're doing: the active
+        app, his reactions (props, typing along) and habit suggestions."""
+        if self._loading:
+            return
+        self._loading = True
+        self.s.aware = self.s.react_activity = self.s.suggestions = bool(on)
+        self._loading = False
+        try:
+            self.s.save()
+        except OSError:
+            return
+        self.saved_note.setText("Saved ✓")
+        self._note_timer.start(1400)
+        self.saved.emit()
 
     def _tab_ai(self) -> QWidget:
         w, lay = self._page()
@@ -1160,15 +1166,13 @@ class SettingsPage(QWidget):
         self.result.setOpenExternalLinks(True)
         self.result.setWordWrap(True)
         dl.addWidget(self.result)
-        self.model_edit = self._edit("model", "auto", 150)
-        dl.addWidget(_row("Model", self.model_edit, "Leave on auto"))
         self._detail_anim = QPropertyAnimation(self.detail, b"maximumHeight", self)
         self._detail_anim.setDuration(220)
         self._detail_anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        backup = Card()
-        backup.add(self._toggle("auto_fallback", "Backup brain",
-                                "Switches to another brain with a key if one runs out"))
+        self.backup_note = QLabel("")
+        self.backup_note.setWordWrap(True)
+        self.backup_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 6px 4px 0 4px;")
 
         voice = Card()
         voice.add(self._toggle("speak_replies", "Speak replies"))
@@ -1177,20 +1181,16 @@ class SettingsPage(QWidget):
         self.voice_pick.changed.connect(lambda v: self._set("voice", v))
         self.voice_row = _row("Voice", self.voice_pick)
         voice.add(self.voice_row)
-        self.cute_row = self._toggle("cute_voice", "Cute voice", "Slightly higher pitch")
+        self.cute_row = self._toggle("cute_voice", "Cute voice")
         voice.add(self.cute_row)
         self.toggles["speak_replies"].toggled.connect(self._voice_rows)
-
-        listen = Card()
-        listen.add(self._toggle("wake_word", "“Hey Kuro”", "Wake him by voice, hands-free"))
+        voice.add(self._toggle("wake_word", "“Hey Kuro”", "Talk to him hands-free"))
 
         lay.addWidget(_section("BRAIN"))
         lay.addWidget(picker)
-        lay.addSpacing(6)
-        lay.addWidget(backup)
-        for title, card in (("VOICE", voice), ("LISTENING", listen)):
-            lay.addWidget(_section(title))
-            lay.addWidget(card)
+        lay.addWidget(self.backup_note)
+        lay.addWidget(_section("VOICE"))
+        lay.addWidget(voice)
         self._voice_rows(self.s.speak_replies)
         lay.addStretch()
         self._show_brain()
@@ -1207,6 +1207,7 @@ class SettingsPage(QWidget):
         current = {a: getattr(self.s, a) for a in self.hotkey_btns}
         why = HK.check(value, attr, current)
         btn = self.hotkey_btns[attr]
+        self.hotkey_note.setVisible(True)
         if why:
             btn.set_value(getattr(self.s, attr))
             self.hotkey_note.setText(why)
@@ -1235,6 +1236,7 @@ class SettingsPage(QWidget):
         pre = P.PRESETS[name]
         for n, row in self.brain_rows.items():
             row.set_state(n == name, self._brain_status(n))
+        self._backup_note()
         # move the details under the chosen row
         self.brain_list.removeWidget(self.detail)
         idx = list(self.brain_rows).index(name) if name in self.brain_rows else 0
@@ -1262,7 +1264,6 @@ class SettingsPage(QWidget):
         if name == self.s.provider:
             self._show_brain()
             return
-        self.model_edit.setText("")
         self._loading = True              # one save for both changes
         self.s.model = ""
         self._loading = False
@@ -1289,6 +1290,17 @@ class SettingsPage(QWidget):
         name = self.s.provider
         for n, row in getattr(self, "brain_rows", {}).items():
             row.set_state(n == name, self._brain_status(n))
+        self._backup_note()
+
+    def _backup_note(self) -> None:
+        if not hasattr(self, "backup_note"):
+            return
+        names = [P.PRESETS[n]["label"] for n in P.backups(self.s)]
+        self.backup_note.setText(
+            f"If {P.PRESETS[self.s.provider]['label']} runs out, {' then '.join(names)} "
+            "takes over." if names else
+            f"Tip: add a free {'Gemini' if self.s.provider == 'groq' else 'Groq'} key too, "
+            "as a backup.")
 
     def _tab_focus(self) -> QWidget:
         w, lay = self._page()
@@ -1299,13 +1311,13 @@ class SettingsPage(QWidget):
         self.break_len = Segmented([(str(m), f"{m}") for m in (5, 10, 15)],
                                    str(self.s.break_minutes), small=True)
         self.break_len.changed.connect(lambda v: self._set("break_minutes", int(v)))
-        card.add(_row("Focus", self.focus_len, "minutes"))
-        card.add(_row("Break", self.break_len, "minutes"))
-        card.add(self._toggle("focus_nap", "Nap while you focus", "Quiet on the taskbar"))
-        tip = QLabel("Start it from his menu (FOCUS) or say “focus for 50 minutes”.")
+        card.add(_row("Focus (min)", self.focus_len))
+        card.add(_row("Break (min)", self.break_len))
+        card.add(self._toggle("focus_nap", "Nap on the taskbar"))
+        tip = QLabel("Start it from his right-click menu, or say “focus for 50 minutes”.")
         tip.setWordWrap(True)
         tip.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px;")
-        lay.addWidget(_section("POMODORO"))
+        lay.addWidget(_section("FOCUS TIMER"))
         lay.addWidget(card)
         lay.addWidget(tip)
         lay.addStretch()
@@ -1317,19 +1329,18 @@ class SettingsPage(QWidget):
         self.g_btn = QPushButton("Connect")
         self.g_btn.setObjectName("seg")
         self.g_btn.clicked.connect(self._google)
-        self.g_row = _row("Google account", self.g_btn, "Not connected")
+        self.g_row = _row("Google", self.g_btn, "Not connected")
         self.g_status = self.g_row.findChildren(QLabel)[1]
         acct.add(self.g_row)
         setup = Card()
         setup.add(_row("Client ID", self._edit("google_client_id", "from Cloud Console", 170)))
         setup.add(_row("Secret", self._edit("google_client_secret", "client secret", 170,
                                             secret=True)))
-        info = QLabel("Calendar: see and add events (adding asks first).\n"
-                      "Gmail: read only. He never sends or deletes mail.\n"
-                      "Setup steps are in the README.")
+        info = QLabel("Lets him read your calendar and inbox. He asks before adding "
+                      "events and can never send or delete mail. One-time setup: see the README.")
         info.setWordWrap(True)
         info.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px;")
-        lay.addWidget(_section("ACCOUNT"))
+        lay.addWidget(_section("CALENDAR & GMAIL"))
         lay.addWidget(acct)
         lay.addWidget(_section("SETUP"))
         lay.addWidget(setup)
@@ -1354,10 +1365,9 @@ class SettingsPage(QWidget):
     def reload(self) -> None:
         self._loading = True
         try:
-            for attr in ("user_name", "translate_to", "model",
-                         "google_client_id", "google_client_secret"):
+            for attr in ("user_name", "google_client_id", "google_client_secret"):
                 getattr(self, f"edit_{attr}").setText(str(getattr(self.s, attr)))
-            self.size.set_value(self.s.chat_size)
+            self.notice_toggle.setChecked(bool(self.s.aware and self.s.react_activity))
             self.focus_len.set_value(str(self.s.focus_minutes))
             self.break_len.set_value(str(self.s.break_minutes))
             for attr, tg in self.toggles.items():
@@ -1379,7 +1389,7 @@ class SettingsPage(QWidget):
             self._show_result(False, f"Paste your {pre['label']} key first.")
             return
         self._key_edited()
-        model = self.model_edit.text().strip()
+        model = self.s.model.strip()
         self.test_btn.setEnabled(False)
         self.result.setText("Testing…")
 

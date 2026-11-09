@@ -61,6 +61,13 @@ class FeaturesMixin:
         self._dnd_timer.start(1500)
         self._start_wake()
 
+    def _translate_target(self) -> str:
+        """Into your language (English → Filipino if Kuro speaks Filipino/Taglish).
+        An explicit translate_to in config.json still wins."""
+        if self.s.translate_to and self.s.translate_to != "English":
+            return self.s.translate_to
+        return "Filipino" if self.s.language in ("Filipino", "Taglish") else "English"
+
     def _feature_hotkeys(self, keyboard) -> None:
         """(Quick actions' hotkey is registered with the others in _bind_hotkeys.)"""
 
@@ -340,7 +347,7 @@ class FeaturesMixin:
         def work():
             try:
                 out = self.brain.provider.complete(
-                    quick.prompt_for(action, src, self.s.translate_to), max_tokens=2048)
+                    quick.prompt_for(action, src, self._translate_target()), max_tokens=2048)
                 self.sig.quick_result.emit(out.strip() or "(nothing came back, try again)")
             except Exception as e:
                 self.sig.quick_result.emit(f"Couldn't do that: {getattr(e, 'detail', '') or e}")
