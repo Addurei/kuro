@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from PySide6.QtCore import QTimer
 
 from . import briefing, location, quick, study, winutil
+from .i18n import t
 from .focus import FocusTimer
 from .google import Google, GoogleError, fmt_email, fmt_event
 from .tools import Tool, ToolError, _obj, _resolve_file, read_file
@@ -34,8 +35,8 @@ class FeaturesMixin:
         self._quick_hwnd = 0
         self._briefing_busy = False
         self.wake = None
-        for t in self._feature_tools():
-            self.tools[t.name] = t
+        for tool in self._feature_tools():
+            self.tools[tool.name] = tool
 
     def _init_features_view(self) -> None:
         """After the widgets exist: timers, panels, hotkeys, wake word."""
@@ -61,7 +62,7 @@ class FeaturesMixin:
         self._start_wake()
 
     def _feature_hotkeys(self, keyboard) -> None:
-        keyboard.add_hotkey(self.s.hotkey_quick, self.sig.hotkey_quick.emit)
+        """(Quick actions' hotkey is registered with the others in _bind_hotkeys.)"""
 
     # ================================================================ tools
     def _feature_tools(self) -> list[Tool]:
@@ -193,30 +194,27 @@ class FeaturesMixin:
             self._wake_cat()
             self.cat.react("surprised", 0.8)
             self.cat._action, self.cat._action_t = "stretch", 0.0
-            self.say(f"Break time! {self.focus.break_s // 60} minutes. Stretch with me, "
-                     f"drink some water.", state="happy")
+            self.say(t(self.s, "focus_break", mins=self.focus.break_s // 60), state="happy")
             self.tray.showMessage(self.s.cat_name, "Break time!")
         elif ev.kind == "focus":
-            self.say("Back to it! I'll keep quiet.", state="happy")
+            self.say(t(self.s, "focus_back"), state="happy")
         elif ev.kind == "done":
             self._wake_cat()
             mins, sessions = self.focus.today()
             self.cat.react("love", 2.5)
             self.cat.hop(220)
             self.cat._burst(36)
-            self.say(f"All {ev.session} sessions done! {mins} minutes of focus today. "
-                     f"I'm proud of you.", state="happy")
+            self.say(t(self.s, "focus_done", n=ev.session, mins=mins), state="happy")
 
     def toggle_focus(self) -> None:
         self._touch()
         if self.focus.active:
             mins = self.focus.stop()
             self.cat.set_focus(None)
-            self.say(f"Focus stopped. {mins} minutes in. Good effort!", state="idle")
+            self.say(t(self.s, "focus_stopped", mins=mins), state="idle")
         else:
             self.focus.start(self.s.focus_minutes, self.s.break_minutes)
-            self.say(f"Focus mode: {self.s.focus_minutes} minutes. I'll nap; "
-                     f"you've got this.", state="happy")
+            self.say(t(self.s, "focus_start", mins=self.s.focus_minutes), state="happy")
             if self.s.focus_nap:                      # curl up on the taskbar
                 geo = self.cat._screen_geo()
                 self.cat.blink_to(geo.right() - self.cat.width() - 30,

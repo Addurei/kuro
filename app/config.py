@@ -78,11 +78,14 @@ class Settings:
     hotkey_voice: str = "ctrl+alt+space"
     hotkey_quick: str = "ctrl+alt+q"  # select text anywhere -> quick actions
     translate_to: str = "English"
+    language: str = "English"         # English | Filipino | Taglish (his replies and lines)
 
     # voice
     voice_enabled: bool = True
     speak_replies: bool = True
     tts_rate: int = 185
+    voice: str = "amy"                # natural voice (amy | ryan | lessac) or "windows"
+    cute_voice: bool = True           # a touch higher and brighter
     wake_word: bool = False           # "Hey Kuro" hands-free
 
     # focus companion

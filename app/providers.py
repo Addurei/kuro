@@ -190,6 +190,49 @@ def classify(status: int, body: str) -> ProviderError:
     return ProviderError(kind, f"HTTP {status}", f"{state} {msg}".strip()[:500])
 
 
+# ------------------------------------------------------------- streaming
+OnText = "Callable[[str], None]"
+
+
+def sse_events(url: str, headers: dict, body: dict, timeout: float = 90.0, who: str = "the AI"):
+    """POST and yield each server-sent event's JSON. Errors before the first
+    byte become ProviderErrors (so fallbacks still work)."""
+    try:
+        with httpx.stream("POST", url, json=body, headers=headers, timeout=timeout) as r:
+            if r.status_code != 200:
+                r.read()
+                raise classify(r.status_code, r.text)
+            for line in r.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    yield json.loads(data)
+                except ValueError:
+                    continue
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        raise ProviderError("connection", f"can't connect to {who}", str(e)) from e
+    except httpx.TimeoutException as e:
+        raise ProviderError("connection", "timed out", str(e)) from e
+    except httpx.HTTPError as e:
+        raise ProviderError("connection", type(e).__name__, str(e)) from e
+
+
+class _Emitted:
+    """Wraps on_text and remembers whether anything reached the user (after
+    that, switching model or brain mid-answer would garble the reply)."""
+
+    def __init__(self, on_text):
+        self.on_text, self.any = on_text, False
+
+    def __call__(self, delta: str) -> None:
+        if delta:
+            self.any = True
+            self.on_text(delta)
+
+
 # ------------------------------------------------------------- provider
 class GeminiProvider:
     name = "gemini"
@@ -259,6 +302,66 @@ class GeminiProvider:
         if tools:
             body["tools"] = gemini_tools(tools)
         return from_gemini(self._call(body))
+
+    def chat_stream(self, persona: str, context: str, tools: list[dict],
+                    messages: list[dict], max_tokens: int, on_text) -> Reply:
+        """Like chat(), but text arrives piece by piece through on_text."""
+        body = {
+            "systemInstruction": {"parts": [{"text": persona + "\n\n" + context}]},
+            "contents": to_gemini(messages),
+            "generationConfig": {"maxOutputTokens": max(max_tokens, 4096), "temperature": 0.7},
+        }
+        if tools:
+            body["tools"] = gemini_tools(tools)
+        emit = _Emitted(on_text)
+        order = [self._good] + [i for i in range(len(self.models)) if i != self._good]
+        last: ProviderError | None = None
+        for i in order:
+            try:
+                reply = self._stream_one(self.models[i], body, emit)
+                self._good = i
+                return reply
+            except ProviderError as e:
+                log.warning("gemini %s stream failed: %s %s", self.models[i], e.kind, e.detail)
+                if emit.any or e.kind not in ("rate", "model_missing"):
+                    raise
+                last = e
+        raise last  # type: ignore[misc]
+
+    def _stream_one(self, model: str, body: dict, emit) -> Reply:
+        url = API.format(model=model).replace(":generateContent",
+                                              ":streamGenerateContent?alt=sse")
+        text, sig, calls, finish = [], None, [], None
+        for ev in sse_events(url, {"x-goog-api-key": self.api_key,
+                                   "Content-Type": "application/json"},
+                             body, self.timeout, "Gemini"):
+            cand = (ev.get("candidates") or [{}])[0]
+            finish = cand.get("finishReason") or finish
+            for part in (cand.get("content") or {}).get("parts") or []:
+                if part.get("thought"):
+                    continue
+                if "functionCall" in part:
+                    calls.append(part)
+                elif part.get("text"):
+                    text.append(part["text"])
+                    emit(part["text"])
+                if part.get("thoughtSignature") and "functionCall" not in part:
+                    sig = part["thoughtSignature"]
+        blocks: list[dict] = []
+        full = "".join(text)
+        if full:
+            raw = {"text": full, **({"thoughtSignature": sig} if sig else {})}
+            blocks.append({"type": "text", "text": full, "extra": {"raw": raw}})
+        for part in calls:
+            fc = part["functionCall"]
+            blocks.append({"type": "tool_use", "id": f"call_{uuid.uuid4().hex[:10]}",
+                           "name": fc.get("name", ""), "input": fc.get("args") or {},
+                           "extra": {"raw": part}})
+        if not blocks:
+            if finish in (None, "STOP"):
+                raise ProviderError("blocked", "Gemini sent an empty answer.")
+            blocks.append({"type": "text", "text": f"(My answer got cut off: {finish}.)"})
+        return Reply("tool_use" if calls else "end_turn", blocks)
 
     def complete(self, prompt: str, max_tokens: int = 1024, light: bool = False) -> str:
         data = self._call({"contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -494,6 +597,36 @@ def from_openai(data: dict) -> Reply:
     return Reply("tool_use" if calls else "end_turn", blocks)
 
 
+class _ThinkFilter:
+    """Reasoning models (qwen3, deepseek) stream '<think>…</think>' first.
+    That's internal: drop it, even when the tags are split across pieces."""
+
+    def __init__(self):
+        self.buf, self.inside = "", False
+
+    def feed(self, piece: str) -> str:
+        self.buf += piece
+        out = []
+        while self.buf:
+            if self.inside:
+                end = self.buf.find("</think>")
+                if end < 0:
+                    self.buf = self.buf[-8:]
+                    return "".join(out)
+                self.buf, self.inside = self.buf[end + 8:], False
+                continue
+            start = self.buf.find("<think>")
+            if start < 0:
+                keep = next((k for k in range(min(7, len(self.buf)), 0, -1)
+                             if "<think>".startswith(self.buf[-k:])), 0)
+                out.append(self.buf[:len(self.buf) - keep])
+                self.buf = self.buf[len(self.buf) - keep:]
+                return "".join(out)
+            out.append(self.buf[:start])
+            self.buf, self.inside = self.buf[start + 7:], True
+        return "".join(out)
+
+
 class OpenAIProvider(_Base):
     def __init__(self, name: str, api_key: str = "", model: str = "", timeout: float = 90.0,
                  base: str = ""):
@@ -585,6 +718,70 @@ class OpenAIProvider(_Base):
         if tools:
             body["tools"] = openai_tools(tools)
         return from_openai(self._call(body))
+
+    def chat_stream(self, persona: str, context: str, tools: list[dict],
+                    messages: list[dict], max_tokens: int, on_text) -> Reply:
+        body = {"messages": [{"role": "system", "content": persona + "\n\n" + context}]
+                + to_openai(messages), **self._limits(max(max_tokens, 1024), 0.7),
+                "stream": True}
+        if tools:
+            body["tools"] = openai_tools(tools)
+        emit = _Emitted(on_text)
+        ms = self.models
+        order = [self._good] + [i for i in range(len(ms)) if i != self._good]
+        last: ProviderError | None = None
+        for i in order[:4]:
+            try:
+                reply = self._stream_one({**body, "model": ms[i]}, emit)
+                self._good = i
+                return reply
+            except ProviderError as e:
+                if self.name == "ollama" and e.kind == "connection":
+                    e.detail = "Ollama isn't running. Start the Ollama app, then try again."
+                log.warning("%s %s stream failed: %s %s", self.name, ms[i], e.kind, e.detail)
+                if emit.any or self.fixed or e.kind not in ("rate", "model_missing",
+                                                             "bad_request"):
+                    raise
+                last = e
+        raise last  # type: ignore[misc]
+
+    def _stream_one(self, body: dict, emit) -> Reply:
+        text: list[str] = []
+        calls: dict[int, dict] = {}
+        think = _ThinkFilter()
+        for ev in sse_events(self.base + "/chat/completions", self._headers(), body,
+                             self.timeout, self.label):
+            ch = (ev.get("choices") or [{}])[0]
+            d = ch.get("delta") or {}
+            if d.get("content"):
+                piece = think.feed(d["content"])
+                text.append(piece)
+                emit(piece)
+            for tc in d.get("tool_calls") or []:
+                slot = calls.setdefault(tc.get("index", len(calls)),
+                                        {"id": "", "name": "", "args": ""})
+                slot["id"] = tc.get("id") or slot["id"]
+                fn = tc.get("function") or {}
+                slot["name"] += fn.get("name") or ""
+                slot["args"] += fn.get("arguments") or ""
+        if think.buf and not think.inside:          # e.g. a final "<" held back
+            text.append(think.buf)
+            emit(think.buf)
+        blocks: list[dict] = []
+        full = "".join(text).strip()
+        if full:
+            blocks.append({"type": "text", "text": full})
+        for k in sorted(calls):
+            c = calls[k]
+            try:
+                args = json.loads(c["args"] or "{}")
+            except ValueError:
+                args = {}
+            blocks.append({"type": "tool_use", "id": c["id"] or f"call_{uuid.uuid4().hex[:10]}",
+                           "name": c["name"], "input": args if isinstance(args, dict) else {}})
+        if not blocks:
+            blocks.append({"type": "text", "text": "(My answer came back empty. Try again?)"})
+        return Reply("tool_use" if calls else "end_turn", blocks)
 
     def complete(self, prompt: str, max_tokens: int = 1024, light: bool = False) -> str:
         data = self._call({"messages": [{"role": "user", "content": prompt}],
@@ -692,6 +889,69 @@ class ClaudeProvider(_Base):
             body["tools"] = tools
         return self._reply(self._call(body))
 
+    def chat_stream(self, persona: str, context: str, tools: list[dict],
+                    messages: list[dict], max_tokens: int, on_text) -> Reply:
+        body = {"system": persona + "\n\n" + context, "max_tokens": max(max_tokens, 1024),
+                "messages": _claude_messages(messages), "stream": True}
+        if tools:
+            body["tools"] = tools
+        emit = _Emitted(on_text)
+        ms = self.models
+        order = [self._good] + [i for i in range(len(ms)) if i != self._good]
+        last: ProviderError | None = None
+        for i in order:
+            try:
+                reply = self._stream_one({**body, "model": ms[i]}, emit)
+                self._good = i
+                return reply
+            except ProviderError as e:
+                log.warning("claude %s stream failed: %s %s", ms[i], e.kind, e.detail)
+                if emit.any or self.fixed or e.kind not in ("rate", "model_missing"):
+                    raise
+                last = e
+        raise last  # type: ignore[misc]
+
+    def _stream_one(self, body: dict, emit) -> Reply:
+        blocks: dict[int, dict] = {}
+        stop = "end_turn"
+        for ev in sse_events(CLAUDE_API + "/messages", self._headers(), body,
+                             self.timeout, "Claude"):
+            kind = ev.get("type")
+            if kind == "content_block_start":
+                cb = dict(ev.get("content_block") or {})
+                if cb.get("type") == "tool_use":
+                    cb["_json"] = ""
+                blocks[ev.get("index", len(blocks))] = cb
+            elif kind == "content_block_delta":
+                b = blocks.get(ev.get("index", 0))
+                d = ev.get("delta") or {}
+                if b is None:
+                    continue
+                if d.get("type") == "text_delta":
+                    b["text"] = b.get("text", "") + d.get("text", "")
+                    emit(d.get("text", ""))
+                elif d.get("type") == "input_json_delta":
+                    b["_json"] += d.get("partial_json", "")
+            elif kind == "message_delta":
+                stop = (ev.get("delta") or {}).get("stop_reason") or stop
+            elif kind == "error":
+                err = ev.get("error") or {}
+                raise ProviderError("rate" if err.get("type") == "overloaded_error" else "other",
+                                    "Claude error", err.get("message", ""))
+        out = []
+        for k in sorted(blocks):
+            b = blocks[k]
+            if b.get("type") == "text" and b.get("text"):
+                out.append({"type": "text", "text": b["text"]})
+            elif b.get("type") == "tool_use":
+                try:
+                    args = json.loads(b.get("_json") or "{}")
+                except ValueError:
+                    args = {}
+                out.append({"type": "tool_use", "id": b.get("id"), "name": b.get("name"),
+                            "input": args})
+        return Reply("tool_use" if stop == "tool_use" else "end_turn", out)
+
     def complete(self, prompt: str, max_tokens: int = 1024, light: bool = False) -> str:
         return self._text(self._call({"max_tokens": max(max_tokens, 256),
                                       "messages": [{"role": "user", "content": prompt}]}))
@@ -759,6 +1019,31 @@ class FallbackProvider:
 
     def chat(self, *a, **k):
         return self._run("chat", *a, **k)
+
+    def chat_stream(self, persona, context, tools, messages, max_tokens, on_text):
+        """Stream from the first brain that's awake. Once words have reached
+        you, a failure is reported instead of starting over on another brain."""
+        import time as _t
+        emit = _Emitted(on_text)
+        last: ProviderError | None = None
+        for p in self._order():
+            try:
+                out = p.chat_stream(persona, context, tools, messages, max_tokens, emit)
+            except ProviderError as e:
+                if emit.any or e.kind not in self.REST:
+                    raise
+                self._rest_until[p.name] = _t.monotonic() + self.REST[e.kind]
+                log.info("brain %s unavailable (%s); trying the next one", p.name, e.kind)
+                last = e
+                continue
+            if p is not self.active:
+                prev, self.active = self.active, p
+                try:
+                    self.on_switch(prev.label, p.label)
+                except Exception:
+                    pass
+            return out
+        raise last  # type: ignore[misc]
 
     def complete(self, *a, **k):
         return self._run("complete", *a, **k)

@@ -62,3 +62,20 @@ def test_typing_is_counted_not_read():
     assert t.rate(window=1.5, now=101.2) == pytest.approx(5 / 1.5, rel=0.3)
     assert t.rate(now=200) == 0
     assert not hasattr(t, "keys")                    # only timestamps are kept
+
+
+def test_lines_follow_the_language_setting():
+    from types import SimpleNamespace
+    from app.i18n import t
+    tr = Tracker(settle=0, gap=0)
+    tr.lang = "Taglish"
+    code = Activity("coding", "VS Code", "brain", "Kuro")
+    tr.update(code, now=0)
+    line = tr.update(code, now=1)
+    assert "Kuro" in line and any(w in line for w in ("na", "ako", "mo"))
+    assert t(SimpleNamespace(language="Filipino"), "woke") == "Gising na ako!"
+    assert t(SimpleNamespace(language="Klingon"), "woke") == "I'm up!"       # falls back
+    assert t(SimpleNamespace(language="Taglish"), "reminder", msg="Thesis") == "Reminder: Thesis"
+    from app.brain import persona_prompt
+    from app.config import Settings
+    assert "Taglish" in persona_prompt(Settings(language="Taglish"))

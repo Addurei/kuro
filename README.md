@@ -37,7 +37,11 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 
 ## What he can do
 
-- **Chat in character**, typed out in his HUD and spoken aloud. Chat size: Settings → General.
+- **Chat in character**: replies stream in word by word, and he starts speaking as soon as the first sentence is done. Chat size and his own size: Settings → General.
+- **Talks naturally**: a neural voice (Piper: Amy, Ryan or Lessac) running offline on your PC, optional "cute" pitch; the Windows voice takes over if the natural one isn't available. First use downloads the voice once (~60 MB).
+- **Listens well**: Whisper on Groq with your same free key (English, Filipino and Taglish), then OpenAI Whisper, then Google as a last resort.
+- **Speaks your language**: English, Filipino or Taglish (Settings → AI & Voice → Language): his replies, his own lines, and how he listens.
+- **Your shortcuts**: click one in Settings → AI & Voice → Shortcuts and press new keys. Clashes and Windows' own shortcuts are refused.
 - **Control your PC**: apps, sites, files, folders, windows, volume, media, screenshots, clipboard, lock. Power actions and PowerShell always ask first.
   Apps are found by name (Start menu, Store apps, installed programs), and he waits for the window to actually appear before saying it's open. If it doesn't, he tells you.
 - **Scan** (just ask): a document, PDF, Word file, code, an image, copied or pasted text, the song playing, your screen, or your PC.
@@ -95,7 +99,7 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
 ## Tests
 
-`python -m pytest` runs the test suite (159 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
+`python -m pytest` runs the test suite (173 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
 
 ## Known limits
 

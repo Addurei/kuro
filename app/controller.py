@@ -7,6 +7,7 @@ back through Qt signals, which Qt delivers safely to the main thread.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from datetime import date, datetime
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .brain import Brain, context_prompt, strip_actions
 from . import activity, scan
+from .i18n import t
 from .config import Settings, app_root, data_dir
 from .features import FeaturesMixin
 from .memory import HabitLog, MemoryStore, Reflector
@@ -46,6 +48,7 @@ TOOL_STATUS = {
 
 class Signals(QObject):
     reply = Signal(str)
+    stream = Signal(str)               # the reply so far, while it streams in
     tool_used = Signal(str)
     heard = Signal(str)
     voice_error = Signal(str)
@@ -164,8 +167,12 @@ class Controller(FeaturesMixin):
         self.hud.mic_clicked.connect(self.start_listening)
         self.hud.clear_clicked.connect(self.reset_chat)
         self.hud.settings_saved.connect(self._settings_saved)
+        self.hud.hotkey_capture.connect(lambda capturing: self._bind_hotkeys(not capturing))
         self.hud.confirm_answered.connect(self._confirm_answered)
         self.sig.reply.connect(self._on_reply)
+        self.sig.stream.connect(self._on_stream)
+        self._streamed = ""
+        self._spoken = 0
         self.sig.tool_used.connect(self._on_tool)
         self.sig.heard.connect(self._on_heard)
         self.sig.voice_error.connect(self._on_voice_error)
@@ -214,8 +221,10 @@ class Controller(FeaturesMixin):
         self.cat.set_state("thinking")
         reflect = self.s.learn_enabled and self.reflector.note_turn()
 
+        self._streamed, self._spoken = "", 0
+
         def work():
-            reply = self.brain.ask(text)
+            reply = self.brain.ask(text, on_text=self.sig.stream.emit)
             try:
                 self.brain.save(self.history_path)
             except OSError:
@@ -234,14 +243,57 @@ class Controller(FeaturesMixin):
                     self.sig.learned.emit(learned)
         threading.Thread(target=work, daemon=True, name="brain").start()
 
+    def _on_stream(self, text: str) -> None:
+        """Words arriving: grow the chat bubble (and the one above his head),
+        and start speaking as soon as the first sentence is complete."""
+        if not self.busy or not text:
+            return
+        if not self._streamed:
+            self.cat.set_state("talking")
+        self._streamed = text
+        self.hud.chat.stream(text)
+        if self.dnd:
+            return                                 # fullscreen: just the chat, quietly
+        if self.hud.page != "chat":
+            self.hud.stream_bubble(text)
+        self._speak_ready(text, final=False)
+
+    def _speak_ready(self, text: str, final: bool) -> None:
+        """Speak every sentence that's complete and not spoken yet."""
+        if not (self.speaker and self.s.speak_replies):
+            self._spoken = len(text)
+            return
+        rest = text[self._spoken:]
+        if final:
+            chunk = rest
+        else:
+            ends = [m.end() for m in re.finditer(r"[.!?…]+[\"')\]]*\s+", rest)]
+            chunk = rest[:ends[-1]] if ends else ""
+        if chunk.strip():
+            self.speaker.say(chunk.strip())
+        self._spoken += len(chunk)
+
     def _on_reply(self, text: str) -> None:
         self.busy = False
         self.pending_suggestion = ""
         self.hud.set_busy(False)
         if not self.s.ready:
             self.hud.chat.set_status("offline")
-        self.hud.chat.add("cat", text)
-        self.say(text)
+        streamed, self._streamed = self._streamed, ""
+        if not (streamed and self.hud.chat.end_stream(text)):
+            self.hud.chat.add("cat", text)
+            self.say(text)                           # not streamed: the classic way
+        elif self.dnd:
+            self._held.append(text if len(text) < 140 else text[:137] + "…")
+        else:
+            if self.hud.page != "chat":
+                self.hud.stream_bubble(text)
+            if text.startswith(streamed[: self._spoken]):
+                self._speak_ready(text, final=True)  # say whatever's left
+            # (if the final text changed shape, don't repeat what was already said)
+            self._touch()
+            duration = min(max(2.0, len(text) / 14), 12)
+            QTimer.singleShot(int(duration * 1000), self._settle)
         self._resume_wake(2 + len(text) / 14)
 
     def _test_key(self, provider: str, key: str, model: str = "") -> str:
@@ -250,7 +302,7 @@ class Controller(FeaturesMixin):
 
     def _brain_switched(self, frm: str, to: str) -> None:
         log.info("brain switched %s -> %s", frm, to)
-        self.hud.chat.add("cat", f"({frm} is out of breath, so {to} is thinking for me now.)",
+        self.hud.chat.add("cat", t(self.s, "switched", frm=frm, to=to),
                           animate=False)
 
     def _on_learned(self, facts: list) -> None:
@@ -395,6 +447,11 @@ class Controller(FeaturesMixin):
 
     def _settings_saved(self) -> None:
         self.brain.refresh_provider()
+        if abs(self.cat.k - 0.82 * self.s.scale) > 1e-6:
+            self.cat.set_scale(self.s.scale)
+        self._bind_hotkeys(True)
+        if self.speaker:
+            self.speaker.set_voice(self.s.voice, self.s.cute_voice)
         self.apply_wake_setting()
         self.google.client_id = self.s.google_client_id
         self.google.client_secret = self.s.google_client_secret
@@ -435,8 +492,8 @@ class Controller(FeaturesMixin):
             from .voice import Listener, Speaker
         except Exception:
             return
-        self.speaker = Speaker(self.s.tts_rate)
-        self.listener = Listener()
+        self.speaker = Speaker(self.s.tts_rate, self.s.voice, self.s.cute_voice)
+        self.listener = Listener(self.s)
 
     def start_listening(self) -> None:
         if self.busy:
@@ -464,7 +521,7 @@ class Controller(FeaturesMixin):
             self._resume_wake()
         self.hud.chat.set_status("online")
         if not text:
-            self.say("Sorry, I didn't catch that.", state="idle")
+            self.say(t(self.s, "missed"), state="idle")
             return
         if self.hud.page != "chat":
             self.hud.open("chat")
@@ -482,11 +539,33 @@ class Controller(FeaturesMixin):
     def _init_hotkeys(self) -> None:
         try:
             import keyboard
-            keyboard.add_hotkey(self.s.hotkey_chat, self.sig.hotkey_chat.emit)
-            keyboard.add_hotkey(self.s.hotkey_voice, self.sig.hotkey_voice.emit)
-            self._feature_hotkeys(keyboard)
             keyboard.on_press(self.typing.press)      # counts presses, never which keys
         except Exception as e:  # missing package, or no permission on Linux
+            log.info("global hotkeys disabled: %s", e)
+            return
+        self._bind_hotkeys(True)
+
+    def _bind_hotkeys(self, on: bool) -> None:
+        """(Re)register the global shortcuts. Off while you pick a new one in
+        Settings, so pressing it there doesn't also trigger it."""
+        try:
+            import keyboard
+            for h in getattr(self, "_hotkey_handles", []):
+                try:
+                    keyboard.remove_hotkey(h)
+                except (KeyError, ValueError):
+                    pass
+            self._hotkey_handles = []
+            if not on:
+                return
+            for combo, emit in ((self.s.hotkey_chat, self.sig.hotkey_chat.emit),
+                                (self.s.hotkey_voice, self.sig.hotkey_voice.emit),
+                                (self.s.hotkey_quick, self.sig.hotkey_quick.emit)):
+                try:
+                    self._hotkey_handles.append(keyboard.add_hotkey(combo, emit))
+                except (ValueError, KeyError) as e:
+                    log.info("hotkey %s not usable: %s", combo, e)
+        except Exception as e:
             log.info("global hotkeys disabled: %s", e)
 
     # ------------------------------------------------------------------
@@ -497,7 +576,7 @@ class Controller(FeaturesMixin):
             self.active = scan.active_window()
         self._react_to_activity()
         for r in self.reminders.pop_due():
-            self.say(f"Reminder: {r.message}", state="happy")
+            self.say(t(self.s, "reminder", msg=r.message), state="happy")
             self.cat.react("surprised", 1.0)
             self.cat.hop(170)
             self.tray.showMessage(f"{self.s.cat_name} reminds you", r.message)
@@ -516,6 +595,7 @@ class Controller(FeaturesMixin):
             self.cat.set_prop("")
             return
         act = activity.detect(*self.active)
+        self.tracker.lang = self.s.language
         line = self.tracker.update(act)
         if not line:
             line = self.tracker.typing_burst(self.typing.rate(window=4.0))
@@ -562,8 +642,7 @@ class Controller(FeaturesMixin):
         self._last_suggest = time.monotonic()
         self.pending_suggestion = f"open {key}"
         when = datetime.now().strftime("%I:%M %p").lstrip("0")
-        self.say(f"It's {when}. You usually open {key} around now. Want me to? "
-                 f"Click here and say yes.", state="happy")
+        self.say(t(self.s, "suggest", when=when, app=key), state="happy")
 
     def _touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -580,7 +659,7 @@ class Controller(FeaturesMixin):
         was_asleep = self.cat.state == "sleeping"
         self._touch()
         if was_asleep:
-            self.say("I'm up!", state="happy")
+            self.say(t(self.s, "woke"), state="happy")
         else:
             self.cat.set_state("happy")
             self.cat.hop(150)
@@ -617,7 +696,7 @@ class Controller(FeaturesMixin):
         """No spoken hello on startup. Only a silent setup hint when he has
         no brain yet, so a new user knows what to do."""
         if not self.s.ready:
-            self.hud.say("Right-click me → Settings → AI & Voice to pick my brain.",
+            self.hud.say(t(self.s, "setup"),
                          seconds=8)
 
     def quit(self) -> None:

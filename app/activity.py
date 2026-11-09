@@ -169,6 +169,68 @@ LINES: dict[str, dict[str, list[str]]] = {
     "watching": {"start": ["Movie night? I'll watch too.", "Ooh, what are we watching?"]},
     "chatting": {"start": ["Say hi to your friends for me!"]},
 }
+LINES_FIL: dict[str, dict[str, list[str]]] = {
+    "coding": {
+        "start_p": ["{p} ulit? Ako na bahala sa mga bug.", "{p} time! Suot ko na salamin ko.",
+                    "Ooh, {p}. Gusto mo ng rubber duck? Pusa ako, pwede na."],
+        "start": ["Nagko-code sa {a}? Uupo lang ako dito, mukhang matalino.",
+                  "Salamin, suot na. Gawa tayo ng malinis na code."],
+        "long": ["{m} minuto ka nang nagko-code. Mag-unat ka muna?",
+                 "{m} minuto na. Uminom ka muna ng tubig?"],
+        "typing": ["Ang bilis mong mag-type!", "Tap tap tap. Tumutulong ako."],
+    },
+    "writing": {
+        "start_s": ["Sinusulat mo ang {s}? Tahimik lang ako. Medyo.",
+                    "Ooh, {s}. Gusto kong mabasa 'yan pag tapos na."],
+        "start": ["Oras ng pagsusulat. Hawak ko na lapis ko.", "Sasamahan kita habang nagsusulat ka."],
+        "long": ["{m} minuto ka nang nagsusulat! Pahinga muna sandali?"],
+        "typing": ["Tuloy-tuloy ang mga salita!", "Ang galing mo!"],
+    },
+    "designing": {
+        "start_s": ["Balik sa {s}? Ang ganda na agad.", "{s}! Pakita mo sa'kin pag tapos na?"],
+        "start": ["Art mode! Suot ko na beret ko.", "May ginagawa kang maganda sa {a}?"],
+        "long": ["{m} minuto na sa {a}. Ipahinga mo muna kamay mo?"],
+    },
+    "studying": {
+        "start_s": ["Nag-aaral ng {s}? Pwede kitang i-quiz mamaya.", "{s}, ha. Kaya mo 'yan."],
+        "start": ["Study time. Ako study buddy mo.", "May binabasa ka? Salamin, suot na."],
+        "long": ["{m} minuto ka nang nag-aaral. Merienda muna?",
+                 "{m} minuto na. Gusto mo simulan ko ang focus timer?"],
+    },
+    "watching": {"start": ["Movie night? Manonood din ako.", "Ooh, ano'ng pinapanood natin?"]},
+    "chatting": {"start": ["Pakisabi hi sa mga kaibigan mo!"]},
+}
+LINES_TAG: dict[str, dict[str, list[str]]] = {
+    "coding": {
+        "start_p": ["{p} na naman? Ako na bahala sa bugs.", "{p} time! Glasses on na ako.",
+                    "Ooh, {p}. Need mo ng rubber duck? Cat ako, pwede na yun."],
+        "start": ["Coding sa {a}? Upo lang ako dito, looking smart.",
+                  "Glasses on. Let's write clean code!"],
+        "long": ["{m} minutes ka nang nagko-code. Stretch muna?",
+                 "{m} minutes na. Water break muna?"],
+        "typing": ["Ang bilis mo mag-type!", "Tap tap tap. Helping ako."],
+    },
+    "writing": {
+        "start_s": ["Writing {s}? Quiet lang ako. Mostly.", "Ooh, {s}. Excited na ako mabasa."],
+        "start": ["Writing time. Ready na pencil ko.", "Samahan kita habang nagsusulat ka."],
+        "long": ["{m} minutes ka nang nagsusulat! Break muna?"],
+        "typing": ["Flowing yung words!", "Go lang!"],
+    },
+    "designing": {
+        "start_s": ["Back sa {s}? Ganda na agad.", "{s}! Pakita mo sakin pag done na?"],
+        "start": ["Art mode! Beret on.", "May ginagawa kang pretty sa {a}?"],
+        "long": ["{m} minutes na sa {a}. Rest mo muna yung wrist mo?"],
+    },
+    "studying": {
+        "start_s": ["Studying {s}? Quiz kita later kung gusto mo.", "{s}, huh. Kaya mo yan!"],
+        "start": ["Study time. Study buddy mo ako.", "May binabasa ka? Glasses on."],
+        "long": ["{m} minutes ka nang nag-aaral. Snack break muna?",
+                 "{m} minutes na. Start ko na focus timer?"],
+    },
+    "watching": {"start": ["Movie night? Nood din ako.", "Ooh, ano pinapanood natin?"]},
+    "chatting": {"start": ["Say hi sa friends mo for me!"]},
+}
+BY_LANG = {"Filipino": LINES_FIL, "Taglish": LINES_TAG}
 LONG_AT = (45, 90, 150)          # minutes of one activity before a gentle check-in
 
 
@@ -187,6 +249,7 @@ class Tracker:
         self._longs: set[tuple[str, int]] = set()
         self._last_said = -1e9
         self._typing_said = -1e9
+        self.lang = "English"
 
     @property
     def minutes(self) -> int:
@@ -234,7 +297,8 @@ class Tracker:
     def _say(self, now: float, act: Activity, what: str, m: int = 0) -> str:
         if now - self._last_said < self.gap:
             return ""
-        lines = LINES.get(act.kind, {})
+        local = BY_LANG.get(self.lang, {}).get(act.kind, {})
+        lines = {**LINES.get(act.kind, {}), **local}
         pool = []
         if what == "start":
             if act.project and "start_p" in lines:

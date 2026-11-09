@@ -12,7 +12,6 @@ Usage:  python scripts/slim.py            (from Kuro's own venv)
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess

@@ -24,13 +24,15 @@ import textwrap
 import threading
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
                                QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import theme
+from .. import hotkeys as HK
 from .. import providers as P
+from ..voice import VOICES
 from .cat_rig import Spring
 from .theme import DIM_HEX, FAINT_HEX, LIME_HEX, TEXT_HEX
 
@@ -233,7 +235,12 @@ class BubblePage(QWidget):
 
     def set_text(self, text: str) -> tuple[int, int]:
         """Lay out for the full text; returns the page size it needs."""
-        self._full, self._shown = text, 0
+        self._shown = 0
+        return self.extend(text)
+
+    def extend(self, text: str) -> tuple[int, int]:
+        """Streaming: the text grew. Keep what's already typed, type the rest."""
+        self._full = text
         fm = self.label.fontMetrics()
         width = min(260, max(90, fm.horizontalAdvance(text) + 6))
         self.label.setFixedWidth(width)
@@ -242,7 +249,7 @@ class BubblePage(QWidget):
         h = self.label.heightForWidth(width)
         self.label.setFixedHeight(h)
         self.label.move(16, 12)
-        self.label.setText("")
+        self.label.setText(text[: self._shown])
         self._typer.start()
         return width + 32, h + 24
 
@@ -433,6 +440,33 @@ class ChatPage(QWidget):
             self._typing = (msg, text, 0)
             self._typer.start()
 
+    def stream(self, text: str) -> None:
+        """A reply that's still arriving: one bubble that grows as words come in."""
+        if getattr(self, "_stream_msg", None) is None:
+            self._finish_typing()
+            self.empty.hide()
+            self.dots_row.hide()
+            msg = Message("cat", text, self.bubble_w, text)
+            gap = 3 if self._last_who == "cat" else 10
+            msg.setContentsMargins(0, gap, 0, 0)
+            self._last_who = "cat"
+            self.rows.insertWidget(self.rows.count() - 1, msg)
+            self._stream_msg = msg
+        msg = self._stream_msg
+        msg.full = text
+        fm = msg.label.fontMetrics()
+        msg.label.setMinimumWidth(min(self.bubble_w, fm.horizontalAdvance(text) + 30))
+        msg.set_text(text)
+
+    def end_stream(self, final: str) -> bool:
+        """The reply is complete. False if nothing was streamed (caller adds it)."""
+        msg, self._stream_msg = getattr(self, "_stream_msg", None), None
+        if msg is None:
+            return False
+        msg.full = final
+        msg.set_text(final)
+        return True
+
     def set_bubble_width(self, w: int) -> None:
         """Chat size changed: resize the bubbles already on screen too."""
         if w == self.bubble_w:
@@ -466,6 +500,7 @@ class ChatPage(QWidget):
 
     def clear(self) -> None:
         self._finish_typing()
+        self._stream_msg = None
         for i in reversed(range(self.rows.count())):
             w = self.rows.itemAt(i).widget()
             if isinstance(w, Message):
@@ -596,9 +631,67 @@ class InlineEdit(FocusLineEdit):
             self.setEchoMode(QLineEdit.Password)
 
 
+class HotkeyButton(QPushButton):
+    """Click, press the new shortcut, done. Esc cancels."""
+    captured = Signal(str)            # 'ctrl+alt+k'
+    capturing = Signal(bool)          # global hotkeys pause while you choose
+
+    def __init__(self, value: str):
+        super().__init__(HK.pretty(value))
+        self.setObjectName("seg")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.value, self.listening = value, False
+        self.clicked.connect(self._start)
+
+    def set_value(self, value: str) -> None:
+        self.value = value
+        if not self.listening:
+            self.setText(HK.pretty(value))
+
+    def _start(self) -> None:
+        self.listening = True
+        self.setText("Press keys…  (Esc cancels)")
+        self.setChecked(True)
+        self.capturing.emit(True)
+        self.window().activateWindow()
+        self.setFocus()
+
+    def _stop(self) -> None:
+        self.listening = False
+        self.setText(HK.pretty(self.value))
+        self.capturing.emit(False)
+
+    def focusOutEvent(self, e) -> None:
+        if self.listening:
+            self._stop()
+        super().focusOutEvent(e)
+
+    def keyPressEvent(self, e) -> None:
+        if not self.listening:
+            return super().keyPressEvent(e)
+        key = e.key()
+        if key == Qt.Key_Escape:
+            self._stop()
+            return
+        if key in (Qt.Key_Control, Qt.Key_Alt, Qt.Key_Shift, Qt.Key_Meta, Qt.Key_AltGr):
+            return                                   # wait for the real key
+        m = e.modifiers()
+        mods = {name for flag, name in ((Qt.ControlModifier, "ctrl"), (Qt.AltModifier, "alt"),
+                                        (Qt.ShiftModifier, "shift"), (Qt.MetaModifier, "windows"))
+                if m & flag}
+        name = QKeySequence(key).toString() or e.text()
+        if not name:
+            return
+        self.listening = False
+        self.capturing.emit(False)
+        self.captured.emit(HK.combo(mods, name))
+
+
 class SettingsPage(QWidget):
     """Clean, grouped settings. Changes save automatically."""
     saved = Signal()
+    hotkey_capture = Signal(bool)
     back = Signal()
     google_clicked = Signal()
     _tested = Signal(bool, str)
@@ -693,6 +786,20 @@ class SettingsPage(QWidget):
                               self.s.chat_size, small=True)
         self.size.changed.connect(lambda v: self._set("chat_size", v))
         kuro.add(_row("Chat size", self.size))
+        self.scale = QSlider(Qt.Horizontal)
+        self.scale.setRange(70, 150)
+        self.scale.setSingleStep(5)
+        self.scale.setFixedWidth(130)
+        self.scale.setValue(int(round(self.s.scale * 100)))
+        self.scale.setStyleSheet(
+            f"QSlider::groove:horizontal {{ height: 4px; background: #23252b; border-radius: 2px; }}"
+            f"QSlider::sub-page:horizontal {{ background: {LIME_HEX}; border-radius: 2px; }}"
+            f"QSlider::handle:horizontal {{ background: {LIME_HEX}; width: 14px; height: 14px;"
+            f" margin: -6px 0; border-radius: 7px; }}")
+        self.scale.sliderReleased.connect(lambda: self._set("scale", self.scale.value() / 100))
+        self.scale.valueChanged.connect(
+            lambda v: None if self.scale.isSliderDown() else self._set("scale", v / 100))
+        kuro.add(_row("Kuro's size", self.scale))
         kuro.add(self._toggle("wander", "Teleport around"))
         kuro.add(self._toggle("dnd_fullscreen", "Hide during fullscreen",
                               "Games and videos"))
@@ -760,20 +867,50 @@ class SettingsPage(QWidget):
                                                    fallback="English")))
         voice = Card()
         voice.add(self._toggle("speak_replies", "Speak replies"))
+        self.voice_pick = Segmented([(k, v[0]) for k, v in VOICES.items()] + [("windows", "Windows")],
+                                    self.s.voice, small=True)
+        self.voice_pick.changed.connect(lambda v: self._set("voice", v))
+        voice.add(_row("Voice", self.voice_pick, "Natural, offline"))
+        voice.add(self._toggle("cute_voice", "Cute voice", "A touch higher and brighter"))
         voice.add(self._toggle("wake_word", "“Hey Kuro”", "Hands-free voice commands"))
+        self.lang_pick = Segmented([("English", "English"), ("Filipino", "Filipino"),
+                                    ("Taglish", "Taglish")], self.s.language, small=True)
+        self.lang_pick.changed.connect(lambda v: self._set("language", v))
+        voice.add(_row("Language", self.lang_pick, "How he talks and listens"))
         keys = Card()
-        for label, k in (("Chat", self.s.hotkey_chat), ("Talk", self.s.hotkey_voice),
-                         ("Quick actions", self.s.hotkey_quick)):
-            chip = QLabel(k.replace("+", " + ").title())
-            chip.setStyleSheet(f"color: {DIM_HEX}; font-size: 8.5pt; background: #191a1f;"
-                               " border-radius: 6px; padding: 3px 7px;")
-            keys.add(_row(label, chip))
+        self.hotkey_btns: dict[str, HotkeyButton] = {}
+        for label, attr in (("Chat", "hotkey_chat"), ("Talk", "hotkey_voice"),
+                            ("Quick actions", "hotkey_quick")):
+            b = HotkeyButton(getattr(self.s, attr))
+            b.captured.connect(lambda c, a=attr: self._hotkey(a, c))
+            b.capturing.connect(self.hotkey_capture)
+            self.hotkey_btns[attr] = b
+            keys.add(_row(label, b))
+        self.hotkey_note = QLabel("Click one, then press the new keys.")
+        self.hotkey_note.setWordWrap(True)
+        self.hotkey_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
+        keys.add(self.hotkey_note)
         for title, card in (("BRAIN", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
             lay.addWidget(_section(title))
             lay.addWidget(card)
         lay.addStretch()
         self._show_brain()
         return w
+
+    def _hotkey(self, attr: str, value: str) -> None:
+        current = {a: getattr(self.s, a) for a in self.hotkey_btns}
+        why = HK.check(value, attr, current)
+        btn = self.hotkey_btns[attr]
+        if why:
+            btn.set_value(getattr(self.s, attr))
+            self.hotkey_note.setText(why)
+            self.hotkey_note.setStyleSheet(f"color: {theme.DANGER_HEX}; font-size: 8pt;"
+                                           " padding: 2px 0 8px 0;")
+            return
+        btn.set_value(value)
+        self.hotkey_note.setText(f"Saved: {HK.pretty(value)}")
+        self.hotkey_note.setStyleSheet(f"color: {LIME_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
+        self._set(attr, value)
 
     def _show_brain(self, note: str = "") -> None:
         """Reflect the chosen brain: pills, key row, and the hint/link line."""
@@ -890,6 +1027,11 @@ class SettingsPage(QWidget):
             for attr, tg in self.toggles.items():
                 tg.setChecked(bool(getattr(self.s, attr)))
             self._show_brain()
+            self.voice_pick.set_value(self.s.voice)
+            self.lang_pick.set_value(self.s.language)
+            self.scale.setValue(int(round(self.s.scale * 100)))
+            for attr, b in self.hotkey_btns.items():
+                b.set_value(getattr(self.s, attr))
         finally:
             self._loading = False
 
@@ -1367,6 +1509,7 @@ class Hud(QWidget):
         self.chat.close_clicked.connect(self.close_panel)
         self.settings.back.connect(lambda: self.open("chat"))
         self.settings.saved.connect(self._saved)
+        self.hotkey_capture = self.settings.hotkey_capture
         self.study.back.connect(lambda: self.open("chat"))
         self.confirm.answered.connect(self._answer)
         self.welcome.finished.connect(self.close_panel)
@@ -1399,6 +1542,18 @@ class Hud(QWidget):
         if seconds is None:
             seconds = min(max(3.5, len(text) / 14), 20.0)
         self._bubble_timer.start(int(seconds * 1000))
+
+    def stream_bubble(self, text: str) -> None:
+        """A streaming reply above his head: the bubble grows instead of
+        restarting, and stays up until a few seconds after the last word."""
+        if self.is_open():
+            return
+        if self.page != "bubble":
+            self.say(text)
+            return
+        w, h = self.bubble.extend(text)
+        self._show("bubble", (w, h))
+        self._bubble_timer.start(int(min(max(3.5, len(text) / 14), 20.0) * 1000))
 
     def open(self, page: str) -> None:
         if page == "settings":

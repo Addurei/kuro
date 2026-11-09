@@ -232,6 +232,20 @@ class CatWidget(QWidget):
             self.music = playing
             self.sp["squash"].kick(0.9 if playing else -0.6)
 
+    def set_scale(self, scale: float) -> None:
+        """Resize him live (Settings → Size), keeping his paws where they are."""
+        scale = max(0.6, min(1.6, scale))
+        foot = self.pos() + self.base.toPoint()
+        self.k = 0.82 * scale
+        self.setFixedSize(int(250 * scale), int(190 * scale))
+        self.base = QPointF(self.width() / 2, self.height() - 14 * scale)
+        self.fx = foot.x() - self.base.x()
+        self.fy = foot.y() - self.base.y()
+        self.move(int(self.fx), int(self.fy))
+        self.sp["squash"].kick(0.8)
+        self.update()
+        self.moved.emit()
+
     def set_prop(self, prop: str) -> None:
         """glasses | pencil | beret | '' (what you're doing decides)."""
         if prop != self.prop:

@@ -55,7 +55,7 @@ def run_kuro(recovered: bool) -> int:
     fault_file = open(_crash_log(), "a", encoding="utf-8")
     faulthandler.enable(fault_file, all_threads=True)
 
-    log = setup_logging()  # noqa: F841
+    setup_logging()
 
     def hook(kind, exc, value, tb):
         text = "".join(traceback.format_exception(exc, value, tb))
@@ -80,8 +80,9 @@ def run_kuro(recovered: bool) -> int:
 
     controller = Controller(app, load_settings())
     if recovered:
+        from app.i18n import t
         QTimer.singleShot(1800, lambda: controller.hud.say(
-            "Oops, I tripped over something. I'm back!", seconds=5))
+            t(controller.s, "recovered"), seconds=5))
     return app.exec()
 
 

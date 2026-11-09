@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config import Settings
+from .i18n import REPLY_RULE
 from .providers import GeminiProvider, ProviderError, backups, label, make_provider
 from .tools import Tool, run_tool
 
@@ -35,6 +36,7 @@ def persona_prompt(s: Settings) -> str:
 You live as a little animated black cat on {s.user_name}'s Windows desktop and help them with their computer and their life.
 
 How you reply:
+- {REPLY_RULE.get(getattr(s, "language", "English"), REPLY_RULE["English"])}
 - Your words appear in a small speech bubble and may be read aloud, so keep replies short (1-3 sentences) unless asked for detail. No markdown, no bullet lists, no emoji spam.
 - Stay in character through your wording and attitude, but being genuinely useful always comes first.
 - Never write actions, sounds or stage directions in asterisks or brackets (no *yawns*, *wags tail*, *purrs*, *mrrp*, (stretches)). Just talk.
@@ -74,6 +76,18 @@ def strip_actions(text: str) -> str:
     out = re.sub(r"^\s*[,.…!]+\s*", "", out)           # "*yawn* …I'm up" -> "I'm up"
     out = re.sub(r"\s+([,.!?…])", r"\1", out)
     return out.strip()
+
+
+def live_text(raw: str) -> str:
+    """What to show while a reply is still streaming in: actions removed, and
+    a half-written '*action' or '(stretch' held back until it closes."""
+    t = raw
+    if t.count("*") % 2:                       # an *action* that hasn't closed yet
+        t = t[:t.rfind("*")]
+    m = re.search(r"[(\[][^)\]]{0,24}$", t)   # "(stret" at the very end
+    if m:
+        t = t[:m.start()]
+    return strip_actions(t)
 
 
 def context_prompt(s: Settings, memory_text: str = "", habits_text: str = "",
@@ -139,30 +153,49 @@ class Brain:
         self.history.clear()
 
     # ------------------------------------------------------------------
-    def ask(self, text: str) -> str:
+    def ask(self, text: str, on_text: Callable[[str], None] | None = None) -> str:
+        """One message in, one reply out. With on_text, the reply streams:
+        on_text gets the whole cleaned reply-so-far every time it grows."""
         start = len(self.history)
         self.history.append({"role": "user", "content": text})
         try:
-            reply = self._loop()
+            reply = self._loop(on_text)
         except Exception as e:
             del self.history[start:]  # never leave a half-finished tool exchange
             return self._friendly_error(e)
         self._trim()
         return reply
 
-    def _loop(self) -> str:
+    def _loop(self, on_text: Callable[[str], None] | None = None) -> str:
         api_tools = [t.as_api() for t in self.tools.values()]
         persona = persona_prompt(self.s)
+        said: list[str] = []                   # text from earlier rounds ("Opening it…")
+        stream = on_text is not None and hasattr(self.provider, "chat_stream")
         for _ in range(MAX_TOOL_ROUNDS):
-            resp = self.provider.chat(persona, self.context(), api_tools,
-                                      self.history, self.s.max_tokens)
+            if stream:
+                parts: list[str] = []
+                shown = [""]
+
+                def grow(delta: str, parts=parts, shown=shown) -> None:
+                    parts.append(delta)
+                    now = live_text(" ".join(said + ["".join(parts)]))
+                    if now != shown[0]:
+                        shown[0] = now
+                        on_text(now)
+                resp = self.provider.chat_stream(persona, self.context(), api_tools,
+                                                 self.history, self.s.max_tokens, grow)
+            else:
+                resp = self.provider.chat(persona, self.context(), api_tools,
+                                          self.history, self.s.max_tokens)
             content = resp.content
             self.history.append({"role": "assistant", "content": content})
-
+            text = " ".join(b.get("text", "") for b in content
+                            if b.get("type") == "text").strip()
             if resp.stop_reason != "tool_use":
-                text = " ".join(b.get("text", "") for b in content
-                                if b.get("type") == "text").strip()
-                return strip_actions(text) or "Hmm, I lost my words there. Try again?"
+                final = strip_actions(" ".join(said + [text]))
+                return final or "Hmm, I lost my words there. Try again?"
+            if text:
+                said.append(text)
 
             results = []
             for block in content:

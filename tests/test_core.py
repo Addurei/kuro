@@ -137,7 +137,7 @@ def test_tool_loop_runs_tool_and_returns_result(tmp_path):
         tool_resp("add_reminder", {"message": "drink water", "in_minutes": 15}),
         text_resp("Done, I'll remind you."),
     ])
-    assert brain.ask("remind me to drink water in 15 min") == "Done, I'll remind you."
+    assert brain.ask("remind me to drink water in 15 min") == "On it. Done, I'll remind you."
     result = client.calls[1]["messages"][-1]["content"][0]
     assert result["type"] == "tool_result" and not result["is_error"]
     assert brain.tools["list_reminders"].func().count("drink water") == 1
