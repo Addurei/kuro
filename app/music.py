@@ -87,7 +87,17 @@ def classify(t: Track, app_id: str = "") -> bool | None:
         return False                              # long talks / movies (mixes say "mix")
     if MUSIC_WORDS.search(title) or MUSIC_ARTIST.search(artist):
         return True
-    return None                                   # unsure: the brain decides
+    if " - " in title or " – " in title:          # "Hev Abi - Song": the usual music upload
+        return True
+    if t.duration:                                # songs are 1-9 minutes; most talk isn't
+        return 75 <= t.duration <= 9 * 60
+    return False
+
+
+def is_music(t: Track, app_id: str = "") -> bool:
+    """Decided on this PC from the title, channel, app and length: instant,
+    and it never spends the brain's (small, free) daily quota."""
+    return bool(classify(t, app_id))
 
 
 def audible(app_id: str) -> bool | None:
@@ -181,6 +191,7 @@ class MusicWatcher(QObject):
     # audible) for this long before Kuro reacts. Hovering a thumbnail on
     # YouTube plays a muted preview for a few seconds: that never counts.
     CONFIRM = 3.0
+    CONFIRM_SILENT = 12.0          # never heard it (muted, or the meter can't tell): wait longer
 
     def offer(self, track: Track | None, now: float | None = None) -> None:
         """A raw reading from Windows. Passes it on only once it's clearly
@@ -207,7 +218,8 @@ class MusicWatcher(QObject):
             return
         if track.audible:
             p["heard"] = True
-        if now - p["since"] >= self.CONFIRM and p["heard"] is not False:
+        waited = now - p["since"]
+        if (waited >= self.CONFIRM and p["heard"] is not False) or waited >= self.CONFIRM_SILENT:
             self._pending = None
             self.feed(track)
 
@@ -234,6 +246,11 @@ class MusicWatcher(QObject):
             return
         self.available = True
         try:
+            import comtypes                          # audio meters need COM on this thread
+            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+        except Exception:
+            pass
+        try:
             asyncio.run(self._loop(Manager))
         except Exception:
             log.exception("music watcher stopped")
@@ -246,7 +263,9 @@ class MusicWatcher(QObject):
             try:
                 self.offer(await self._read(mgr))
             except Exception as e:                   # a session closed mid-read, etc.
-                log.debug("music read failed: %s", e)
+                if str(e) != getattr(self, "_last_err", ""):
+                    self._last_err = str(e)
+                    log.info("music read failed: %s", e)
             await asyncio.sleep(self.interval)
 
     async def _read(self, mgr) -> Track | None:

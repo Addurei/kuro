@@ -118,6 +118,16 @@ def test_silent_preview_never_confirms_but_real_song_does():
     assert [t.title for t in seen] == ["Wait"]
 
 
+def test_meter_misreading_silence_cant_block_a_real_song_forever():
+    w = MusicWatcher(start=False)
+    seen = []
+    w.changed.connect(seen.append)
+    song = Track("Wait", "M83", "Browser", True, audible=False)
+    for t in range(0, 13):
+        w.offer(song, now=t)
+    assert [t.title for t in seen] == ["Wait"]
+
+
 def test_same_track_pause_resume_is_instant():
     w = MusicWatcher(start=False)
     seen = []
@@ -139,7 +149,10 @@ def test_same_track_pause_resume_is_instant():
     (Track("The Deepest Hole Ever Dug | Documentary", "Real Stories", "Browser"), False),
     (Track("Skip this", "Brand", "Browser", duration=15), False),
     (Track("Building a PC: full tutorial", "Linus", "Browser", duration=1500), False),
-    (Track("Blinding Lights", "The Weeknd", "Browser", duration=200), None),   # brain decides
+    (Track("Blinding Lights", "The Weeknd", "Browser", duration=200), True),   # song-length
+    (Track("Hev Abi - Alam Mo Ba Girl", "Hev Abi", "Browser"), True),          # Artist - Song
+    (Track("I tried living in Tokyo for 30 days", "Abroad", "Browser", duration=900), False),
+    (Track("Funny cat compilation", "Cats", "Browser"), False),                 # no clues: no
 ])
 def test_classify_music(track, verdict):
     from app.music import classify
