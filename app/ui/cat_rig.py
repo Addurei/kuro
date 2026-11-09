@@ -54,10 +54,17 @@ class Spring:
         self.k = k
         self.d = 2 * math.sqrt(k) * damping   # damping < 1 = bouncy, 1 = no overshoot
 
+    MAX_STEP = 1 / 240               # physics sub-step: same motion at 20, 30 or 60 fps
+
     def step(self, dt: float) -> None:
-        acc = self.k * (self.target - self.value) - self.d * self.vel
-        self.vel += acc * dt
-        self.value += self.vel * dt
+        n = 1 if dt <= self.MAX_STEP else int(dt / self.MAX_STEP) + 1
+        h = dt / n
+        k, d, target = self.k, self.d, self.target
+        v, x = self.vel, self.value
+        for _ in range(n):
+            v += (k * (target - x) - d * v) * h
+            x += v * h
+        self.vel, self.value = v, x
 
     def kick(self, velocity: float) -> None:
         self.vel += velocity
@@ -588,7 +595,6 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
 def _sheen(p: QPainter, clip: QPainterPath, centre: QPointF, radius: float,
            alpha: int) -> None:
     p.save()
-    p.setClipPath(clip)
     g = QRadialGradient(centre, radius)
     g.setColorAt(0, QColor(255, 255, 255, alpha))
     g.setColorAt(1, QColor(255, 255, 255, 0))

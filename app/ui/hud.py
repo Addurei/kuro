@@ -23,7 +23,8 @@ import math
 import textwrap
 import threading
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import (QEasingCurve, QElapsedTimer, QPoint, QPointF, QPropertyAnimation, QRectF,
+                            Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
@@ -631,6 +632,83 @@ class InlineEdit(FocusLineEdit):
             self.setEchoMode(QLineEdit.Password)
 
 
+def _rgba(hex_: str, alpha: float) -> str:
+    """'#bae25c', 0.13 -> 'rgba(186, 226, 92, 0.13)'. (Qt reads 8-digit hex as
+    #AARRGGBB, not the web's #RRGGBBAA, so tints are spelled out.)"""
+    c = QColor(hex_)
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
+
+
+class BrainRow(QFrame):
+    """One brain in the picker: badge, name, one-line description, status."""
+    picked = Signal(str)
+
+    def __init__(self, name: str):
+        super().__init__()
+        self.name = name
+        pre = P.PRESETS[name]
+        self.setObjectName("brainrow")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(48)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setSpacing(10)
+        accent = P.ACCENT.get(name, LIME_HEX)
+        badge = QLabel(pre["label"][0])
+        badge.setFixedSize(28, 28)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet(f"background: {_rgba(accent, 0.13)}; color: {accent};"
+                            f" border: 1px solid {_rgba(accent, 0.4)};"
+                            " border-radius: 14px; font-weight: 700; font-size: 10pt;")
+        lay.addWidget(badge)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        self.title = QLabel(pre["label"])
+        self.title.setStyleSheet(f"color: {TEXT_HEX}; font-size: 9.5pt; font-weight: 600;"
+                                 " background: transparent;")
+        top.addWidget(self.title)
+        if pre.get("badge"):
+            star = QLabel(pre["badge"])
+            star.setStyleSheet(f"color: {LIME_HEX}; font-size: 7.5pt; background: transparent;")
+            top.addWidget(star)
+        top.addStretch()
+        col.addLayout(top)
+        blurb = QLabel(P.BLURB.get(name, ""))
+        blurb.setWordWrap(True)
+        blurb.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; background: transparent;")
+        col.addWidget(blurb)
+        lay.addLayout(col, 1)
+        self.status = QLabel("")
+        self.status.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.status, 0, Qt.AlignVCenter)
+        self.set_state(False, "")
+
+    def set_state(self, selected: bool, status: str) -> None:
+        border = LIME_HEX if selected else "#1d1f24"
+        bg = "#171a14" if selected else "#121317"
+        self.setStyleSheet(f"QFrame#brainrow {{ background: {bg}; border: 1px solid {border};"
+                           " border-radius: 11px; }"
+                           "QFrame#brainrow:hover { border-color: #3a3d45; }" if not selected else
+                           f"QFrame#brainrow {{ background: {bg}; border: 1px solid {border};"
+                           " border-radius: 11px; }")
+        styles = {"In use": ("#0e0f12", LIME_HEX, LIME_HEX),
+                  "Backup": (LIME_HEX, "transparent", _rgba(LIME_HEX, 0.45)),
+                  "Key saved": (TEXT_HEX, "transparent", "#3a3d45"),
+                  "Offline": (TEXT_HEX, "transparent", "#3a3d45"),
+                  "Add key": (DIM_HEX, "transparent", "#2a2c32")}
+        fg, bgc, bd = styles.get(status, (DIM_HEX, "transparent", "#2a2c32"))
+        self.status.setText(status)
+        self.status.setVisible(bool(status))
+        self.status.setStyleSheet(f"color: {fg}; background: {bgc}; border: 1px solid {bd};"
+                                  " border-radius: 9px; padding: 2px 8px; font-size: 7.5pt;")
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.LeftButton:
+            self.picked.emit(self.name)
+
+
 class HotkeyButton(QPushButton):
     """Click, press the new shortcut, done. Esc cancels."""
     captured = Signal(str)            # 'ctrl+alt+k'
@@ -774,6 +852,8 @@ class SettingsPage(QWidget):
             return
         self.saved_note.setText("Saved ✓")
         self._note_timer.start(1400)
+        if attr in ("auto_fallback", "provider"):
+            self._refresh_rows()
         self.saved.emit()
 
     # ------------------------------------------------------------ tabs
@@ -820,30 +900,32 @@ class SettingsPage(QWidget):
 
     def _tab_ai(self) -> QWidget:
         w, lay = self._page()
-        brain = Card()
-        # brain picker: a 3x2 grid of pills, each with its price tag
-        grid_w = QWidget()
-        grid = QGridLayout(grid_w)
-        grid.setContentsMargins(0, 8, 0, 6)
-        grid.setSpacing(5)
-        self.brain_btns: dict[str, QPushButton] = {}
+        # brain picker: a list of brains; the chosen one opens up with its key
+        picker = QWidget()
+        self.brain_list = QVBoxLayout(picker)
+        self.brain_list.setContentsMargins(0, 0, 0, 0)
+        self.brain_list.setSpacing(6)
+        self.brain_rows: dict[str, BrainRow] = {}
         names = P.ORDER + (["cloud"] if getattr(self.s, "cloud_url", "") else [])
-        for i, name in enumerate(names):
-            pre = P.PRESETS[name]
-            b = QPushButton(f"{pre['label']}\n{pre.get('badge') or pre['tag']}")
-            b.setObjectName("seg")
-            b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setStyleSheet("padding: 5px 4px; font-size: 8.5pt;")
-            b.clicked.connect(lambda _c=False, n=name: self._pick_brain(n))
-            self.brain_btns[name] = b
-            grid.addWidget(b, i // 3, i % 3)
-        brain.add(grid_w)
+        for name in names:
+            row = BrainRow(name)
+            row.picked.connect(self._pick_brain)
+            self.brain_rows[name] = row
+            self.brain_list.addWidget(row)
 
+        # the details that open under the chosen brain
+        self.detail = QFrame()
+        self.detail.setObjectName("braindetail")
+        self.detail.setStyleSheet("QFrame#braindetail { background: #0f1013; border: 1px solid #1d1f24;"
+                                  " border-radius: 10px; }")
+        dl = QVBoxLayout(self.detail)
+        dl.setContentsMargins(12, 4, 12, 8)
+        dl.setSpacing(0)
         self.key = InlineEdit("", "paste key", 150, secret=True)
         self.key.editingFinished.connect(self._key_edited)
         self.test_btn = QPushButton("Test")
         self.test_btn.setObjectName("seg")
+        self.test_btn.setCursor(Qt.PointingHandCursor)
         self.test_btn.clicked.connect(self._test)
         keyrow = QWidget()
         kr = QHBoxLayout(keyrow)
@@ -853,13 +935,18 @@ class SettingsPage(QWidget):
         kr.addWidget(self.test_btn)
         self.key_row = _row("Key", keyrow)
         self.key_label = self.key_row.findChildren(QLabel)[0]
-        brain.add(self.key_row)
+        dl.addWidget(self.key_row)
         self.result = QLabel("")
         self.result.setOpenExternalLinks(True)
         self.result.setWordWrap(True)
-        brain.add(self.result)
+        dl.addWidget(self.result)
         self.model_edit = self._edit("model", "auto", 150)
-        brain.add(_row("Model", self.model_edit, "Auto picks the best one"))
+        dl.addWidget(_row("Model", self.model_edit, "Auto picks the best one"))
+        self._detail_anim = QPropertyAnimation(self.detail, b"maximumHeight", self)
+        self._detail_anim.setDuration(220)
+        self._detail_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        brain = Card()
         brain.add(self._toggle("auto_fallback", "Backup brain",
                                "Out of free uses? I switch to another brain you've added "
                                "a key for. Tip: add Groq and Gemini both."))
@@ -890,8 +977,13 @@ class SettingsPage(QWidget):
         self.hotkey_note.setWordWrap(True)
         self.hotkey_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
         keys.add(self.hotkey_note)
-        for title, card in (("BRAIN", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
-            lay.addWidget(_section(title))
+        lay.addWidget(_section("BRAIN"))
+        lay.addWidget(picker)
+        for title, card in (("", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
+            if title:
+                lay.addWidget(_section(title))
+            else:
+                lay.addSpacing(6)
             lay.addWidget(card)
         lay.addStretch()
         self._show_brain()
@@ -912,14 +1004,29 @@ class SettingsPage(QWidget):
         self.hotkey_note.setStyleSheet(f"color: {LIME_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
         self._set(attr, value)
 
-    def _show_brain(self, note: str = "") -> None:
-        """Reflect the chosen brain: pills, key row, and the hint/link line."""
+    def _brain_status(self, name: str) -> str:
+        has_key = bool(self.s.key_for(name).strip())
+        if name == self.s.provider:
+            return "In use"
+        if name in P.backups(self.s):
+            return "Backup"
+        if name == "ollama":
+            return "Offline"
+        return "Key saved" if has_key else "Add key"
+
+    def _show_brain(self, note: str = "", animate: bool = False) -> None:
+        """Reflect the chosen brain: highlight its row, open its details
+        right under it, and show every other brain's status."""
         name = self.s.provider if self.s.provider in P.PRESETS else "gemini"
         pre = P.PRESETS[name]
-        for n, b in self.brain_btns.items():
-            b.setChecked(n == name)
+        for n, row in self.brain_rows.items():
+            row.set_state(n == name, self._brain_status(n))
+        # move the details under the chosen row
+        self.brain_list.removeWidget(self.detail)
+        idx = list(self.brain_rows).index(name) if name in self.brain_rows else 0
+        self.brain_list.insertWidget(idx + 1, self.detail)
         self.key.setVisible(pre["needs_key"])
-        self.key_label.setText(f"{pre['label']} key" if pre["needs_key"] else pre["label"])
+        self.key_label.setText(f"{pre['label']} key" if pre["needs_key"] else "No key needed")
         self.key.setText(self.s.key_for(name))
         verb = "Get a free key" if pre["tag"] == "free" else \
             "Get Ollama" if name == "ollama" else "Get a key"
@@ -927,6 +1034,15 @@ class SettingsPage(QWidget):
                 f'href="{pre["key_url"]}">{verb} ↗</a>') if pre["key_url"] else ""
         self.result.setText(f'{html.escape(note or pre["key_hint"])}{link}')
         self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 0 0 8px 0;")
+        self.detail.show()
+        full = self.detail.sizeHint().height()
+        if animate:                                   # slide open under the new choice
+            self._detail_anim.stop()
+            self._detail_anim.setStartValue(0)
+            self._detail_anim.setEndValue(full)
+            self._detail_anim.start()
+        else:
+            self.detail.setMaximumHeight(full)
 
     def _pick_brain(self, name: str) -> None:
         if name == self.s.provider:
@@ -937,7 +1053,7 @@ class SettingsPage(QWidget):
         self.s.model = ""
         self._loading = False
         self._set("provider", name)
-        self._show_brain()
+        self._show_brain(animate=True)
 
     def _key_edited(self) -> None:
         if self._loading:
@@ -952,7 +1068,13 @@ class SettingsPage(QWidget):
             return
         self.saved_note.setText("Saved ✓")
         self._note_timer.start(1400)
+        self._refresh_rows()
         self.saved.emit()
+
+    def _refresh_rows(self) -> None:
+        name = self.s.provider
+        for n, row in getattr(self, "brain_rows", {}).items():
+            row.set_state(n == name, self._brain_status(n))
 
     def _tab_focus(self) -> QWidget:
         w, lay = self._page()

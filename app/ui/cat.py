@@ -355,10 +355,29 @@ class CatWidget(QWidget):
         self.move(int(self.fx), int(self.fy))
 
     # =============================================================== tick
+    # how fast a spring must be moving to count as visible motion (units/s)
+    MOTION = {"yaw": 6, "head_yaw": 6, "pitch": 4, "squash": 0.25, "lean": 3, "tilt": 3,
+              "hlag_x": 6, "hlag_y": 6, "tw_l": 12, "tw_r": 12, "ear": 8, "tail_drag": 0.15,
+              "eye_scale": 0.25, "happy": 0.3, "look_x": 0.4, "look_y": 0.4, "expr": 0.3,
+              "bob": 3, "whisk": 15, "jig": 4, "tail_sway": 0.12, "tail_side": 0.12,
+              "dangle": 4, "paw": 0.3, "lick": 0.3, "sleep": 0.08, "blep": 0.3, "glasses": 0.3,
+              "pencil": 0.3, "beret": 0.3, "knead": 0.2, "phones": 0.3, "gx": 0.3, "gy": 0.3}
+
+    def _moving(self) -> bool:
+        """Is anything on screen visibly moving right now? (Then: 60 fps.)"""
+        sp = self.sp
+        return any(abs(sp[name].vel) > thr for name, thr in self.MOTION.items() if name in sp)
+
     def _tick(self) -> None:
-        dt = min(self._clock.restart() / 1000.0, 1 / 20)
-        if dt <= 0:
+        raw = min(self._clock.restart() / 1000.0, 1 / 20)
+        if raw <= 0:
             return
+        # Windows' timer ticks unevenly (15/16/17 ms). Easing dt toward the
+        # real elapsed time keeps motion evenly spaced frame to frame, while
+        # a big gap (frame rate change, busy PC) is taken in immediately.
+        prev = getattr(self, "_dt", raw)
+        dt = raw if abs(raw - prev) > 0.012 else prev + (raw - prev) * 0.35
+        self._dt = dt
         self.t += dt
         self._move(dt)
         self._follow_through()
@@ -403,7 +422,7 @@ class CatWidget(QWidget):
                   or self._scan_fade > 0 or self._action or self.expr
                   or self.state in ("talking", "happy", "listening", "thinking")
                   or self._cursor_speed > 400 or self._blink >= 0
-                  or abs(self.sp["squash"].vel) > 0.5 or self.sp["knead"].value > 0.05)
+                  or self.sp["knead"].value > 0.05 or self._moving())
         if self.away:
             ms = 250
         elif lively:

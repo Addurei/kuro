@@ -446,6 +446,18 @@ PRESETS: dict[str, dict] = {
                "key_hint": "Paid key from Anthropic"},
 }
 ORDER = ["groq", "gemini", "openrouter", "ollama", "openai", "claude"]
+# for the brain picker: one plain line each, and an accent colour for the badge
+BLURB = {
+    "groq": "Free · fastest replies · big daily limit",
+    "gemini": "Free · can see images and your screen · small daily limit",
+    "openrouter": "Free models from many AI labs",
+    "ollama": "Free · runs on this PC, works offline",
+    "openai": "Paid · OpenAI's GPT models",
+    "claude": "Paid · Anthropic's Claude models",
+    "cloud": "Your Kuro subscription",
+}
+ACCENT = {"groq": "#f2734f", "gemini": "#6f9cf7", "openrouter": "#9b8cf5", "ollama": "#d8d9de",
+          "openai": "#3fbf95", "claude": "#e0906d", "cloud": "#bae25c"}
 RECOMMENDED = "groq"          # free, fast, and far more generous limits than Gemini's free tier
 # when the chosen brain is out of quota / unreachable, try these (if they have keys)
 FALLBACK_ORDER = ["groq", "gemini", "openrouter", "openai", "claude"]
