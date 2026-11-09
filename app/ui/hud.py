@@ -1590,9 +1590,18 @@ class RadialMenu(QWidget):
         self._timer = QTimer(self, interval=16, timeout=self._step)
 
     def popup(self, head: QPoint) -> None:
-        self.move(int(head.x() - self.centre.x()), int(head.y() - self.centre.y() + 30))
+        self.follow(head)
         self.show()
         self._timer.start()
+
+    def follow(self, head: QPoint) -> None:
+        """Stay fanned out above his head wherever he is."""
+        if self.isVisible() or not self._timer.isActive():
+            self.move(int(head.x() - self.centre.x()), int(head.y() - self.centre.y() + 30))
+
+    def hideEvent(self, e) -> None:
+        self._timer.stop()                   # no animating a closed menu
+        super().hideEvent(e)
 
     def _pos(self, i: int) -> QPointF:
         n = len(self.items)
@@ -1607,6 +1616,8 @@ class RadialMenu(QWidget):
             if self._t > i * 0.035:
                 s.target = 1.0
             s.step(0.016)
+        if self._t > 1.0 and self.hover < 0 and all(abs(s.value - 1) < 0.002 for s in self.springs):
+            return                               # settled: no need to repaint 60x a second
         self.update()
 
     def _hit(self, pos: QPointF) -> int:
@@ -1617,7 +1628,10 @@ class RadialMenu(QWidget):
         return -1
 
     def mouseMoveEvent(self, e) -> None:
-        self.hover = self._hit(e.position())
+        hover = self._hit(e.position())
+        if hover != self.hover:
+            self.hover = hover
+            self.update()
         self.setCursor(Qt.PointingHandCursor if self.hover >= 0 else Qt.ArrowCursor)
 
     def mousePressEvent(self, e) -> None:

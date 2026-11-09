@@ -326,8 +326,10 @@ class Controller(FeaturesMixin):
             self.cat.set_state("sleeping" if napping else "idle")
 
     def _can_wander(self) -> bool:
+        menu = getattr(self, "_menu", None)
         return (self.s.wander and not self.busy and not self.hud.is_open()
-                and not self.dnd and not self.focus.active)
+                and not self.dnd and not self.focus.active
+                and not (menu is not None and menu.isVisible()))   # stay put under his menu
 
     def toggle_chat(self) -> None:
         self._touch()
@@ -351,7 +353,12 @@ class Controller(FeaturesMixin):
             ("gear", "SETTINGS", lambda: self.hud.open("settings")),
             ("power", "QUIT", self.quit),
         ])
+        old = getattr(self, "_menu", None)
+        if old is not None:
+            old.close()
         self._menu = menu
+        # the menu stays pinned to his head if he moves (dragged, reminder hop...)
+        self.cat.moved.connect(lambda: menu.follow(self.cat.head_anchor()))
         menu.popup(head)
 
     def _on_music(self, track) -> None:
