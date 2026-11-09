@@ -1,0 +1,27 @@
+# Core
+PySide6-Essentials>=6.7   # just the Qt parts Kuro uses (~1/3 the size of full PySide6)
+httpx>=0.27            # Gemini brain
+
+# PC control
+psutil
+pyperclip
+keyboard
+mss
+pycaw ; sys_platform == "win32"
+comtypes ; sys_platform == "win32"
+
+# Music mode (reads what Spotify / YouTube are playing)
+winrt-runtime ; sys_platform == "win32"
+winrt-Windows.Foundation ; sys_platform == "win32"
+winrt-Windows.Foundation.Collections ; sys_platform == "win32"
+winrt-Windows.Media.Control ; sys_platform == "win32"
+winrt-Windows.Storage.Streams ; sys_platform == "win32"
+
+# Reading documents
+pypdf
+python-docx
+
+# Voice
+pyttsx3
+SpeechRecognition
+PyAudio

@@ -1,0 +1,4 @@
+# Only needed to run the tests or build Kuro.exe (build.bat installs these).
+-r requirements.txt
+pytest
+pyinstaller

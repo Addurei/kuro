@@ -1,0 +1,1388 @@
+"""Kuro's HUD: one panel pinned above his head.
+
+It follows him in real time and morphs between pages:
+
+    bubble    what he just said (click it to open the chat)
+    chat      the conversation
+    settings  your name, Gemini key (with a Test button), a few switches
+    memory    what he has learned about you
+    confirm   "allow this?" before anything risky
+
+Only one page shows at a time. Opening one smoothly reshapes the panel
+instead of spawning a new window. A lime light runs around the border
+(faster while he's thinking, red when he's asking for permission).
+
+The window itself is a fixed, mostly transparent canvas; only the panel
+is painted. On Windows, clicks on the transparent part fall through to
+whatever is underneath.
+"""
+from __future__ import annotations
+
+import html
+import math
+import textwrap
+import threading
+
+from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
+                               QLabel, QLineEdit, QPushButton,
+                               QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+
+from . import theme
+from .cat_rig import Spring
+from .theme import DIM_HEX, FAINT_HEX, LIME_HEX, TEXT_HEX
+
+CANVAS_W, CANVAS_H = 460, 620
+GAP = 4            # between the panel's pointer and Kuro's head
+POINTER = 8
+
+
+# =================================================================== widgets
+class IconButton(QAbstractButton):
+    def __init__(self, kind: str, size: int = 30, filled: bool = False, parent=None):
+        super().__init__(parent)
+        self.kind, self.filled, self.active = kind, filled, False
+        self.setFixedSize(size, size)
+        self.setCursor(Qt.PointingHandCursor)
+        self._t = 0.0
+        self._pulse = QTimer(self, interval=30, timeout=self._step)
+
+    def set_active(self, on: bool) -> None:
+        self.active = on
+        self._pulse.start() if on else self._pulse.stop()
+        self.update()
+
+    def _step(self) -> None:
+        self._t += 0.03
+        self.update()
+
+    def enterEvent(self, e):
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        c = r.center()
+        hover = self.underMouse()
+        if self.filled:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#cdf07a") if hover else theme.LIME)
+            p.drawEllipse(r)
+            theme.icon(p, self.kind, c, r.width() * 0.42, QColor(10, 10, 11))
+            return
+        if self.active:
+            for k in range(2):
+                ph = (self._t + k * 0.5) % 1.0
+                p.setPen(QPen(theme.lime(0.7 * (1 - ph)), 1.4))
+                p.setBrush(Qt.NoBrush)
+                rr = r.width() / 2 * (0.7 + 0.35 * ph)
+                p.drawEllipse(c, rr, rr)
+        if hover or self.active:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(255, 255, 255, 14))
+            p.drawEllipse(r.adjusted(2, 2, -2, -2))
+        col = theme.LIME if (self.active or (hover and self.kind != "close")) else \
+            QColor(theme.DANGER_HEX) if (hover and self.kind == "close") else QColor("#9a9da5")
+        theme.icon(p, self.kind, c, r.width() * 0.46, col)
+
+
+class Toggle(QAbstractButton):
+    """A small pill switch with a sliding knob."""
+
+    def __init__(self, checked: bool = False, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setFixedSize(34, 18)
+        self.setCursor(Qt.PointingHandCursor)
+        self._pos = Spring(1.0 if checked else 0.0, 300, 0.7)
+        self._timer = QTimer(self, interval=16, timeout=self._step)
+        self.toggled.connect(lambda on: (setattr(self._pos, "target", 1.0 if on else 0.0),
+                                         self._timer.start()))
+
+    def _step(self) -> None:
+        self._pos.step(0.016)
+        if abs(self._pos.value - self._pos.target) < 0.002 and abs(self._pos.vel) < 0.01:
+            self._timer.stop()
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        v = max(0.0, min(1.0, self._pos.value))
+        track = QColor(theme.LIME)
+        track.setAlphaF(0.15 + 0.85 * v)
+        off = QColor("#24262c")
+        col = QColor(int(off.red() + (track.red() - off.red()) * v),
+                     int(off.green() + (track.green() - off.green()) * v),
+                     int(off.blue() + (track.blue() - off.blue()) * v))
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(0, 0, 34, 18), 9, 9)
+        x = 9 + 16 * self._pos.value
+        p.setBrush(QColor(10, 10, 11) if v > 0.5 else QColor("#9a9da5"))
+        p.drawEllipse(QPointF(x, 9), 6.2, 6.2)
+
+
+class StatusOrb(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(16, 16)
+        self.mode = "online"
+        self._t = 0.0
+        self._timer = QTimer(self, interval=33, timeout=self._step)
+
+    def showEvent(self, e):            # only animate while it's on screen
+        self._timer.start()
+        super().showEvent(e)
+
+    def hideEvent(self, e):
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def _step(self) -> None:
+        self._t += 0.033 * (3.2 if self.mode in ("thinking", "listening") else 1.0)
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        c = QPointF(8, 8)
+        base = QColor("#5a5d65") if self.mode == "offline" else theme.LIME
+        ph = (self._t * 0.8) % 1.0
+        p.setPen(QPen(theme.with_alpha(base, 0.55 * (1 - ph)), 1.3))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(c, 2.5 + 5 * ph, 2.5 + 5 * ph)
+        p.setPen(Qt.NoPen)
+        p.setBrush(base)
+        p.drawEllipse(c, 2.8, 2.8)
+
+
+class Field(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("field")
+
+    def set_focus_look(self, on: bool) -> None:
+        self.setProperty("focus", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
+class FocusLineEdit(QLineEdit):
+    focus_changed = Signal(bool)
+
+    def focusInEvent(self, e):
+        self.focus_changed.emit(True)
+        super().focusInEvent(e)
+
+    def focusOutEvent(self, e):
+        self.focus_changed.emit(False)
+        super().focusOutEvent(e)
+
+
+def _field(widget: QWidget, *extra: QWidget) -> Field:
+    f = Field()
+    lay = QHBoxLayout(f)
+    lay.setContentsMargins(12, 2, 4, 2)
+    lay.setSpacing(4)
+    lay.addWidget(widget, 1)
+    for w in extra:
+        lay.addWidget(w)
+    if isinstance(widget, FocusLineEdit):
+        widget.focus_changed.connect(f.set_focus_look)
+    return f
+
+
+def _caption(text: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setFont(theme.mono(7.2, spacing=125))
+    lab.setStyleSheet(f"color: {DIM_HEX};")
+    return lab
+
+
+def _title(text: str, color: str = LIME_HEX) -> QLabel:
+    lab = QLabel(text)
+    lab.setFont(theme.mono(8.5, bold=True, spacing=140))
+    lab.setStyleSheet(f"color: {color};")
+    return lab
+
+
+# ===================================================================== pages
+class BubblePage(QWidget):
+    clicked = Signal()
+
+    def __init__(self, cat_name: str):
+        super().__init__()
+        self.setCursor(Qt.PointingHandCursor)
+        self.label = QLabel(self)
+        self.label.setWordWrap(True)
+        self.label.setFont(theme.sans(10))
+        self.label.setStyleSheet(f"color: {TEXT_HEX};")
+        self._full = ""
+        self._shown = 0
+        self._typer = QTimer(self, interval=16, timeout=self._type)
+
+    def set_text(self, text: str) -> tuple[int, int]:
+        """Lay out for the full text; returns the page size it needs."""
+        self._full, self._shown = text, 0
+        fm = self.label.fontMetrics()
+        width = min(260, max(90, fm.horizontalAdvance(text) + 6))
+        self.label.setFixedWidth(width)
+        self.label.setText(text)
+        self.label.adjustSize()
+        h = self.label.heightForWidth(width)
+        self.label.setFixedHeight(h)
+        self.label.move(16, 12)
+        self.label.setText("")
+        self._typer.start()
+        return width + 32, h + 24
+
+    def _type(self) -> None:
+        step = max(1, len(self._full) // 50)
+        self._shown = min(len(self._full), self._shown + step)
+        self.label.setText(self._full[: self._shown])
+        if self._shown >= len(self._full):
+            self._typer.stop()
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+
+class TypingDots(QWidget):
+    """Three dots that bounce in turn while Kuro is thinking."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(38, 14)
+        self._t = 0.0
+        self._timer = QTimer(self, interval=30, timeout=self._step)
+
+    def showEvent(self, e):
+        self._timer.start()
+        super().showEvent(e)
+
+    def hideEvent(self, e):
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def _step(self) -> None:
+        self._t += 0.03
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        for i in range(3):
+            ph = (self._t * 2.2 - i * 0.18) % 1.0
+            up = math.sin(min(ph, 0.5) * 2 * math.pi) if ph < 0.5 else 0.0
+            p.setBrush(theme.lime(0.45 + 0.55 * max(0.0, up)))
+            p.drawEllipse(QPointF(7 + i * 12, 8 - 3.2 * max(0.0, up)), 3, 3)
+
+
+BUBBLE_CSS = {
+    "cat": ("QLabel { background: #141519; border: 1px solid #1e2025; color: %s;"
+            " border-radius: 14px; border-bottom-left-radius: 5px; padding: 8px 12px; }" % TEXT_HEX),
+    "you": ("QLabel { background: #232832; color: #eef0f3;"
+            " border-radius: 14px; border-bottom-right-radius: 5px; padding: 8px 12px; }"),
+}
+
+
+class Message(QWidget):
+    """One chat bubble. (No per-bubble opacity effect: nesting it inside the
+    HUD's own fade makes Qt's painter misbehave.)"""
+
+    def __init__(self, who: str, text: str, max_width: int, full_text: str = ""):
+        super().__init__()
+        self.who = who
+        self.full = full_text or text
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.label = QLabel()
+        self.label.setWordWrap(True)
+        self.label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.label.setTextFormat(Qt.PlainText)
+        if who == "system":
+            self.label.setAlignment(Qt.AlignCenter)
+            self.label.setFont(theme.mono(7, spacing=115))
+            self.label.setStyleSheet(f"color: {FAINT_HEX}; padding: 4px;")
+            lay.addWidget(self.label, 1)
+        else:
+            self.label.setFont(theme.sans(9.8))
+            self.label.setStyleSheet(BUBBLE_CSS[who])
+            self.label.setMaximumWidth(max_width)
+            fm = self.label.fontMetrics()           # size for the whole reply up front
+            self.label.setMinimumWidth(min(max_width, fm.horizontalAdvance(full_text or text) + 30))
+            if who == "you":
+                lay.addStretch(1)
+            lay.addWidget(self.label)
+            if who == "cat":
+                lay.addStretch(1)
+        self.set_text(text)
+
+    def set_text(self, text: str) -> None:
+        self.label.setText(text)
+
+
+class ChatPage(QWidget):
+    submitted = Signal(str)
+    mic_clicked = Signal()
+    clear_clicked = Signal()
+    close_clicked = Signal()
+
+    def __init__(self, cat_name: str):
+        super().__init__()
+        self.cat_name = cat_name
+        self.busy = False
+        self.bubble_w = 236
+        self._typing: tuple[Message, str, int] | None = None
+
+        self.orb = StatusOrb()
+        name = QLabel(cat_name)
+        name.setFont(theme.sans(10.5, bold=True))
+        new = IconButton("refresh", 26)
+        new.setToolTip("New conversation")
+        new.clicked.connect(self.clear_clicked)
+        close = IconButton("close", 26)
+        close.setToolTip("Close")
+        close.clicked.connect(self.close_clicked)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(self.orb)
+        head.addWidget(name)
+        head.addStretch()
+        head.addWidget(new)
+        head.addWidget(close)
+
+        # conversation: real widgets in a scroll area (no HTML re-rendering)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        inner = QWidget()
+        self.rows = QVBoxLayout(inner)
+        self.rows.setContentsMargins(0, 4, 6, 4)
+        self.rows.setSpacing(0)
+        self.rows.addStretch(1)
+        self.empty = QLabel(f"Ask {html.escape(cat_name)} to open an app, find a file,\n"
+                            f"set a reminder, or just talk.")
+        self.empty.setAlignment(Qt.AlignCenter)
+        self.empty.setStyleSheet(f"color: {FAINT_HEX};")
+        self.rows.addWidget(self.empty)
+        self.dots_row = QWidget()
+        dl = QHBoxLayout(self.dots_row)
+        dl.setContentsMargins(0, 10, 0, 0)
+        dots_bubble = QFrame()
+        dots_bubble.setStyleSheet("QFrame { background: #141519; border: 1px solid #1e2025;"
+                                  " border-radius: 13px; border-bottom-left-radius: 5px; }")
+        db = QHBoxLayout(dots_bubble)
+        db.setContentsMargins(10, 7, 10, 7)
+        db.addWidget(TypingDots())
+        dl.addWidget(dots_bubble)
+        dl.addStretch(1)
+        self.dots_row.hide()
+        self.rows.addWidget(self.dots_row)
+        self.scroll.setWidget(inner)
+        self.scroll.verticalScrollBar().rangeChanged.connect(
+            lambda _lo, hi: self.scroll.verticalScrollBar().setValue(hi))
+
+        self.input = FocusLineEdit()
+        self.input.setFont(theme.sans(10))
+        self.input.setPlaceholderText(f"Message {cat_name}…")
+        self.input.returnPressed.connect(self._send)
+        self.mic = IconButton("mic", 30)
+        self.mic.setToolTip("Talk")
+        self.mic.clicked.connect(self.mic_clicked)
+        send = IconButton("send", 30, filled=True)
+        send.clicked.connect(self._send)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 14, 14)
+        lay.setSpacing(8)
+        lay.addLayout(head)
+        lay.addWidget(self.scroll, 1)
+        lay.addWidget(_field(self.input, self.mic, send))
+
+        self._typer = QTimer(self, interval=20, timeout=self._type_step)
+        self._last_who = ""
+
+    # status lives in the orb only: calm when idle, quick while thinking
+    def set_status(self, mode: str) -> None:
+        self.orb.mode = mode
+        self.mic.set_active(mode == "listening")
+
+    def add(self, who: str, text: str, animate: bool = True) -> None:
+        self._finish_typing()
+        self.empty.hide()
+        msg = Message(who, "" if (who == "cat" and animate) else text, self.bubble_w, text)
+        gap = 3 if who == self._last_who and who != "system" else 10
+        msg.setContentsMargins(0, gap, 0, 0)
+        self._last_who = who
+        self.rows.insertWidget(self.rows.count() - 1, msg)   # above the typing dots
+        if who == "cat" and animate:
+            self._typing = (msg, text, 0)
+            self._typer.start()
+
+    def set_bubble_width(self, w: int) -> None:
+        """Chat size changed: resize the bubbles already on screen too."""
+        if w == self.bubble_w:
+            return
+        self.bubble_w = w
+        for i in range(self.rows.count()):
+            m = self.rows.itemAt(i).widget()
+            if isinstance(m, Message) and m.who != "system":
+                m.label.setMaximumWidth(w)
+                fm = m.label.fontMetrics()
+                m.label.setMinimumWidth(min(w, fm.horizontalAdvance(m.full) + 30))
+
+    def _type_step(self) -> None:
+        if not self._typing:
+            self._typer.stop()
+            return
+        msg, text, n = self._typing
+        n = min(len(text), n + max(1, len(text) // 60))
+        msg.set_text(text[:n])
+        self._typing = (msg, text, n)
+        if n >= len(text):
+            self._typing = None
+            self._typer.stop()
+
+    def _finish_typing(self) -> None:
+        if self._typing:
+            msg, text, _ = self._typing
+            msg.set_text(text)
+            self._typing = None
+            self._typer.stop()
+
+    def clear(self) -> None:
+        self._finish_typing()
+        for i in reversed(range(self.rows.count())):
+            w = self.rows.itemAt(i).widget()
+            if isinstance(w, Message):
+                self.rows.removeWidget(w)
+                w.deleteLater()
+        self._last_who = ""
+        self.empty.show()
+
+    def texts(self) -> list[tuple[str, str]]:
+        out = []
+        for i in range(self.rows.count()):
+            w = self.rows.itemAt(i).widget()
+            if isinstance(w, Message):
+                out.append((w.who, w.label.text()))
+        return out
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        self.input.setEnabled(not busy)
+        self.dots_row.setVisible(busy)
+        if not busy:
+            self.input.setFocus()
+
+    def _send(self) -> None:
+        text = self.input.text().strip()
+        if text and not self.busy:
+            self.input.clear()
+            self.submitted.emit(text)
+
+
+class Segmented(QWidget):
+    """A row of pill buttons, one selected (like iOS segmented control)."""
+    changed = Signal(str)
+
+    def __init__(self, options: list[tuple[str, str]], value: str, small: bool = False):
+        super().__init__()
+        self.buttons: dict[str, QPushButton] = {}
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        for key, label in options:
+            b = QPushButton(label)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            if small:
+                b.setStyleSheet("padding: 4px 6px;")
+            b.clicked.connect(lambda _c=False, k=key: self.set_value(k, emit=True))
+            self.buttons[key] = b
+            lay.addWidget(b)
+        self.set_value(value)
+
+    def set_value(self, key: str, emit: bool = False) -> None:
+        if key not in self.buttons:
+            key = next(iter(self.buttons))
+        self.value = key
+        for k, b in self.buttons.items():
+            b.setChecked(k == key)
+        if emit:
+            self.changed.emit(key)
+
+
+class Card(QFrame):
+    """A rounded group of settings rows with thin dividers (iOS-style)."""
+
+    def __init__(self, title: str = ""):
+        super().__init__()
+        self.setObjectName("card")
+        self.setStyleSheet("QFrame#card { background: #121317; border: 1px solid #1d1f24;"
+                           " border-radius: 12px; }")
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(12, 4, 12, 4)
+        self._lay.setSpacing(0)
+        self.title = title
+        self._rows = 0
+
+    def add(self, w: QWidget) -> QWidget:
+        if self._rows:
+            line = QFrame()
+            line.setFixedHeight(1)
+            line.setStyleSheet("background: #1b1c21; border: none;")
+            self._lay.addWidget(line)
+        self._lay.addWidget(w)
+        self._rows += 1
+        return w
+
+
+def _section(title: str) -> QLabel:
+    lab = QLabel(title)
+    lab.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px 4px 4px;")
+    return lab
+
+
+def _row(label: str, widget: QWidget | None = None, hint: str = "") -> QWidget:
+    w = QWidget()
+    w.setMinimumHeight(40)
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 7, 0, 7)
+    lay.setSpacing(10)
+    col = QVBoxLayout()
+    col.setSpacing(1)
+    lab = QLabel(label)
+    lab.setStyleSheet(f"color: {TEXT_HEX}; font-size: 9.5pt; background: transparent;")
+    col.addWidget(lab)
+    if hint:
+        h = QLabel(hint)
+        h.setWordWrap(True)
+        h.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; background: transparent;")
+        col.addWidget(h)
+    lay.addLayout(col, 1)
+    if widget is not None:
+        lay.addWidget(widget, 0, Qt.AlignVCenter)
+    return w
+
+
+class InlineEdit(FocusLineEdit):
+    """A borderless right-aligned text box that lives inside a settings row."""
+
+    def __init__(self, text: str = "", placeholder: str = "", width: int = 150,
+                 secret: bool = False):
+        super().__init__(text)
+        self.setPlaceholderText(placeholder)
+        self.setFixedWidth(width)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setStyleSheet(f"QLineEdit {{ color: {LIME_HEX}; font-size: 9.5pt; padding: 2px 0; }}"
+                           f"QLineEdit:focus {{ color: {TEXT_HEX}; }}")
+        if secret:
+            self.setEchoMode(QLineEdit.Password)
+
+
+class SettingsPage(QWidget):
+    """Clean, grouped settings. Changes save automatically."""
+    saved = Signal()
+    back = Signal()
+    google_clicked = Signal()
+    _tested = Signal(bool, str)
+
+    TABS = [("general", "General"), ("ai", "AI && Voice"), ("focus", "Focus"),
+            ("google", "Google")]
+
+    def __init__(self, settings, tester):
+        super().__init__()
+        self.s = settings
+        self.tester = tester          # callable(key) -> model name, raises on failure
+        self.toggles: dict[str, Toggle] = {}
+        self._loading = False
+
+        back = IconButton("back", 26)
+        back.setToolTip("Back")
+        back.clicked.connect(self.back)
+        title = QLabel("Settings")
+        title.setFont(theme.sans(10.5, bold=True))
+        self.saved_note = QLabel("")
+        self.saved_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt;")
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.addWidget(back)
+        top.addWidget(title)
+        top.addStretch()
+        top.addWidget(self.saved_note)
+
+        self.tabbar = Segmented(self.TABS, "general")
+        self.pages = QStackedWidget()
+        self.tabbar.changed.connect(lambda k: self.pages.setCurrentIndex(
+            [t for t, _ in self.TABS].index(k)))
+        for key, _label in self.TABS:
+            content = getattr(self, f"_tab_{key}")()
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setFrameShape(QFrame.NoFrame)
+            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            sc.setWidget(content)
+            self.pages.addWidget(sc)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 12, 14)
+        lay.setSpacing(10)
+        lay.addLayout(top)
+        lay.addWidget(self.tabbar)
+        lay.addWidget(self.pages, 1)
+        self._tested.connect(self._show_result)
+        self._note_timer = QTimer(self, singleShot=True, timeout=lambda: self.saved_note.setText(""))
+
+    # ------------------------------------------------------------ building blocks
+    def _page(self) -> tuple[QWidget, QVBoxLayout]:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 6, 0)
+        lay.setSpacing(4)
+        return w, lay
+
+    def _toggle(self, attr: str, label: str, hint: str = "") -> QWidget:
+        tg = Toggle(bool(getattr(self.s, attr)))
+        tg.toggled.connect(lambda on, a=attr: self._set(a, on))
+        self.toggles[attr] = tg
+        return _row(label, tg, hint)
+
+    def _edit(self, attr: str, placeholder: str, width: int = 150, secret: bool = False,
+              fallback: str = "") -> InlineEdit:
+        e = InlineEdit(str(getattr(self.s, attr)), placeholder, width, secret)
+        e.editingFinished.connect(lambda a=attr, w=e, fb=fallback:
+                                  self._set(a, w.text().strip() or fb))
+        setattr(self, f"edit_{attr}", e)
+        return e
+
+    def _set(self, attr: str, value) -> None:
+        if self._loading or getattr(self.s, attr) == value:
+            return
+        setattr(self.s, attr, value)
+        try:
+            self.s.save()
+        except OSError:
+            return
+        self.saved_note.setText("Saved ✓")
+        self._note_timer.start(1400)
+        self.saved.emit()
+
+    # ------------------------------------------------------------ tabs
+    def _tab_general(self) -> QWidget:
+        w, lay = self._page()
+        you = Card()
+        you.add(_row("Name", self._edit("user_name", "your name", fallback="friend")))
+        you.add(_row("City", self._edit("city", "for the weather")))
+        kuro = Card()
+        self.size = Segmented([("small", "S"), ("medium", "M"), ("large", "L")],
+                              self.s.chat_size, small=True)
+        self.size.changed.connect(lambda v: self._set("chat_size", v))
+        kuro.add(_row("Chat size", self.size))
+        kuro.add(self._toggle("wander", "Teleport around"))
+        kuro.add(self._toggle("dnd_fullscreen", "Hide during fullscreen",
+                              "Games and videos"))
+        kuro.add(self._toggle("morning_briefing", "Daily briefing",
+                              "Weather, calendar and reminders"))
+        priv = Card()
+        priv.add(self._toggle("learn_enabled", "Learn from our chats"))
+        priv.add(self._toggle("aware", "Notice which app I'm in"))
+        priv.add(self._toggle("suggestions", "Habit suggestions"))
+        priv.add(self._toggle("allow_shell", "PowerShell", "Always asks first"))
+        for title, card in (("YOU", you), ("KURO", kuro), ("PRIVACY", priv)):
+            lay.addWidget(_section(title))
+            lay.addWidget(card)
+        lay.addStretch()
+        return w
+
+    def _tab_ai(self) -> QWidget:
+        w, lay = self._page()
+        brain = Card()
+        self.key = self._edit("gemini_key", "paste key", 150, secret=True)
+        self.test_btn = QPushButton("Test")
+        self.test_btn.setObjectName("seg")
+        self.test_btn.clicked.connect(self._test)
+        keyrow = QWidget()
+        kr = QHBoxLayout(keyrow)
+        kr.setContentsMargins(0, 0, 0, 0)
+        kr.setSpacing(6)
+        kr.addWidget(self.key)
+        kr.addWidget(self.test_btn)
+        brain.add(_row("Gemini key", keyrow))
+        self.result = QLabel(f'<a style="color:{LIME_HEX}; text-decoration:none" '
+                             f'href="https://aistudio.google.com/apikey">Get a free key ↗</a>')
+        self.result.setOpenExternalLinks(True)
+        self.result.setWordWrap(True)
+        self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 0 0 8px 0;")
+        brain.add(self.result)
+        brain.add(_row("Translate into", self._edit("translate_to", "English", 110,
+                                                   fallback="English")))
+        voice = Card()
+        voice.add(self._toggle("speak_replies", "Speak replies"))
+        voice.add(self._toggle("wake_word", "“Hey Kuro”", "Hands-free voice commands"))
+        keys = Card()
+        for label, k in (("Chat", self.s.hotkey_chat), ("Talk", self.s.hotkey_voice),
+                         ("Quick actions", self.s.hotkey_quick)):
+            chip = QLabel(k.replace("+", " + ").title())
+            chip.setStyleSheet(f"color: {DIM_HEX}; font-size: 8.5pt; background: #191a1f;"
+                               " border-radius: 6px; padding: 3px 7px;")
+            keys.add(_row(label, chip))
+        for title, card in (("AI", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
+            lay.addWidget(_section(title))
+            lay.addWidget(card)
+        lay.addStretch()
+        return w
+
+    def _tab_focus(self) -> QWidget:
+        w, lay = self._page()
+        card = Card()
+        self.focus_len = Segmented([(str(m), f"{m}") for m in (15, 25, 45, 50)],
+                                   str(self.s.focus_minutes), small=True)
+        self.focus_len.changed.connect(lambda v: self._set("focus_minutes", int(v)))
+        self.break_len = Segmented([(str(m), f"{m}") for m in (5, 10, 15)],
+                                   str(self.s.break_minutes), small=True)
+        self.break_len.changed.connect(lambda v: self._set("break_minutes", int(v)))
+        card.add(_row("Focus", self.focus_len, "minutes"))
+        card.add(_row("Break", self.break_len, "minutes"))
+        card.add(self._toggle("focus_nap", "Nap while you focus", "Quiet on the taskbar"))
+        tip = QLabel("Start it from his menu (FOCUS) or say “focus for 50 minutes”.")
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px;")
+        lay.addWidget(_section("POMODORO"))
+        lay.addWidget(card)
+        lay.addWidget(tip)
+        lay.addStretch()
+        return w
+
+    def _tab_google(self) -> QWidget:
+        w, lay = self._page()
+        acct = Card()
+        self.g_btn = QPushButton("Connect")
+        self.g_btn.setObjectName("seg")
+        self.g_btn.clicked.connect(self._google)
+        self.g_row = _row("Google account", self.g_btn, "Not connected")
+        self.g_status = self.g_row.findChildren(QLabel)[1]
+        acct.add(self.g_row)
+        setup = Card()
+        setup.add(_row("Client ID", self._edit("google_client_id", "from Cloud Console", 170)))
+        setup.add(_row("Secret", self._edit("google_client_secret", "client secret", 170,
+                                            secret=True)))
+        info = QLabel("Calendar: see and add events (adding asks first).\n"
+                      "Gmail: read only. He never sends or deletes mail.\n"
+                      "Setup steps are in the README.")
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px;")
+        lay.addWidget(_section("ACCOUNT"))
+        lay.addWidget(acct)
+        lay.addWidget(_section("SETUP"))
+        lay.addWidget(setup)
+        lay.addWidget(info)
+        lay.addStretch()
+        return w
+
+    # ------------------------------------------------------------ behaviour
+    def set_google_status(self, connected: bool, text: str) -> None:
+        self.g_btn.setText("Disconnect" if connected else "Connect")
+        self.g_btn.setEnabled(True)
+        self.g_status.setText(text)
+
+    def _google(self) -> None:
+        for attr in ("google_client_id", "google_client_secret"):
+            e = getattr(self, f"edit_{attr}")
+            setattr(self.s, attr, e.text().strip())
+        self.g_btn.setEnabled(False)
+        self.g_status.setText("Opening Google sign-in in your browser…")
+        self.google_clicked.emit()
+
+    def reload(self) -> None:
+        self._loading = True
+        try:
+            for attr in ("user_name", "city", "gemini_key", "translate_to",
+                         "google_client_id", "google_client_secret"):
+                getattr(self, f"edit_{attr}").setText(str(getattr(self.s, attr)))
+            self.size.set_value(self.s.chat_size)
+            self.focus_len.set_value(str(self.s.focus_minutes))
+            self.break_len.set_value(str(self.s.break_minutes))
+            for attr, tg in self.toggles.items():
+                tg.setChecked(bool(getattr(self.s, attr)))
+        finally:
+            self._loading = False
+
+    def _test(self) -> None:
+        key = self.key.text().strip()
+        if not key:
+            self._show_result(False, "Paste a key first.")
+            return
+        self._set("gemini_key", key)
+        self.test_btn.setEnabled(False)
+        self.result.setText("Testing…")
+
+        def work():
+            try:
+                model = self.tester(key)
+                self._tested.emit(True, f"Connected ✓  ({model})")
+            except Exception as e:     # show Google's own words
+                detail = getattr(e, "detail", "") or str(e)
+                kind = getattr(e, "kind", "")
+                hint = {"auth": "The key was rejected. Copy it again from AI Studio.",
+                        "connection": "Can't reach Google. Check the internet / firewall.",
+                        "rate": "Free limit reached for now. Try again in a minute.",
+                        "model_missing": "No free Gemini model is available to this key."
+                        }.get(kind, "")
+                self._tested.emit(False, f"{hint}\n{detail[:220]}".strip())
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_result(self, ok: bool, text: str) -> None:
+        self.test_btn.setEnabled(True)
+        self.result.setText(html.escape(text).replace("\n", "<br>"))
+        self.result.setStyleSheet(f"color: {LIME_HEX if ok else theme.DANGER_HEX}; "
+                                  f"font-size: 8pt; padding: 0 0 8px 0;")
+
+
+class StudyPage(QWidget):
+    """Quiz (pick an answer, see why) or flashcards (flip, next)."""
+    back = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.items: list[dict] = []
+        self.mode = "quiz"
+        self.i = 0
+        self.score = 0
+        self.answered = False
+        self.flipped = False
+
+        b = IconButton("back", 26)
+        b.setToolTip("Back to chat")
+        b.clicked.connect(self.back)
+        self.title = QLabel("Study")
+        self.title.setFont(theme.sans(10.5, bold=True))
+        self.count = QLabel("")
+        self.count.setStyleSheet(f"color: {DIM_HEX}; font-size: 8.5pt;")
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.addWidget(b)
+        top.addWidget(self.title)
+        top.addStretch()
+        top.addWidget(self.count)
+
+        self.card = QFrame()
+        self.card.setObjectName("card")
+        self.card.setStyleSheet("QFrame#card { background: #141519; border: 1px solid #23252b;"
+                                " border-radius: 14px; }")
+        self.q = QLabel()
+        self.q.setWordWrap(True)
+        self.q.setFont(theme.sans(10.5, bold=True))
+        self.q.setStyleSheet(f"color: {TEXT_HEX}; background: transparent; border: none;")
+        self.q.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.back_text = QLabel()
+        self.back_text.setWordWrap(True)
+        self.back_text.setFont(theme.sans(9.8))
+        self.back_text.setStyleSheet(f"color: {LIME_HEX}; background: transparent; border: none;")
+        cl = QVBoxLayout(self.card)
+        cl.setContentsMargins(14, 14, 14, 14)
+        cl.addWidget(self.q)
+        cl.addWidget(self.back_text)
+        cl.addStretch()
+
+        self.opts: list[QPushButton] = []
+        self.opt_box = QVBoxLayout()
+        self.opt_box.setSpacing(6)
+        for k in range(4):
+            o = QPushButton()
+            o.setObjectName("option")
+            o.setCursor(Qt.PointingHandCursor)
+            o.clicked.connect(lambda _c=False, k=k: self._pick(k))
+            self.opts.append(o)
+            self.opt_box.addWidget(o)
+        self.why = QLabel()
+        self.why.setWordWrap(True)
+        self.why.setStyleSheet(f"color: {DIM_HEX}; font-size: 8.8pt;")
+
+        self.prev_btn = QPushButton("BACK")
+        self.prev_btn.setObjectName("ghost")
+        self.prev_btn.clicked.connect(self._prev)
+        self.next_btn = QPushButton("NEXT")
+        self.next_btn.setObjectName("primary")
+        self.next_btn.clicked.connect(self._next)
+        nav = QHBoxLayout()
+        nav.addWidget(self.prev_btn)
+        nav.addStretch()
+        nav.addWidget(self.next_btn)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 14)
+        lay.setSpacing(8)
+        lay.addLayout(top)
+        lay.addWidget(self.card, 1)
+        lay.addLayout(self.opt_box)
+        lay.addWidget(self.why)
+        lay.addLayout(nav)
+
+    def load(self, items: list[dict], mode: str, title: str) -> None:
+        self.items, self.mode = items, mode
+        self.title.setText(title[:32] or "Study")
+        self.i, self.score = 0, 0
+        self._show()
+
+    def _show(self) -> None:
+        n = len(self.items)
+        done = self.i >= n
+        self.answered, self.flipped = False, False
+        self.why.setText("")
+        self.prev_btn.setVisible(self.mode == "cards" and 0 < self.i < n)
+        if done:
+            self.count.setText("")
+            if self.mode == "quiz":
+                pct = round(100 * self.score / max(1, n))
+                msg = ("Purr-fect!" if pct == 100 else "Nice work!" if pct >= 70
+                       else "Good start. Try again?")
+                self.q.setText(f"{self.score} / {n} correct ({pct}%)\n\n{msg}")
+            else:
+                self.q.setText(f"You went through all {n} cards!")
+            self.back_text.setText("")
+            for o in self.opts:
+                o.hide()
+            self.next_btn.setText("AGAIN")
+            return
+        self.count.setText(f"{self.i + 1} / {n}")
+        it = self.items[self.i]
+        if self.mode == "quiz":
+            self.q.setText(it["q"])
+            self.back_text.setText("")
+            for k, o in enumerate(self.opts):
+                o.show()
+                o.setEnabled(True)
+                o.setProperty("state", "")
+                o.setText(f"{'ABCD'[k]}   " + textwrap.fill(it['options'][k], 46)
+                          .replace("\n", "\n      "))
+                o.style().unpolish(o)
+                o.style().polish(o)
+            self.next_btn.setText("SKIP")
+        else:
+            for o in self.opts:
+                o.hide()
+            self.q.setText(it["front"])
+            self.back_text.setText("")
+            self.next_btn.setText("FLIP")
+
+    def _pick(self, k: int) -> None:
+        if self.answered or self.i >= len(self.items):
+            return
+        it = self.items[self.i]
+        self.answered = True
+        if k == it["answer"]:
+            self.score += 1
+        for j, o in enumerate(self.opts):
+            o.setEnabled(False)
+            o.setProperty("state", "right" if j == it["answer"] else
+                          "wrong" if j == k else "")
+            o.style().unpolish(o)
+            o.style().polish(o)
+        self.why.setText(("✓ " if k == it["answer"] else "✗ ") + (it.get("why") or ""))
+        self.next_btn.setText("NEXT")
+
+    def _next(self) -> None:
+        if self.i >= len(self.items):              # AGAIN
+            self.i, self.score = 0, 0
+            self._show()
+            return
+        if self.mode == "cards" and not self.flipped:
+            self.flipped = True
+            self.back_text.setText(self.items[self.i]["back"])
+            self.next_btn.setText("NEXT")
+            return
+        self.i += 1
+        self._show()
+
+    def _prev(self) -> None:
+        if self.i > 0:
+            self.i -= 1
+            self._show()
+
+
+class ConfirmPage(QWidget):
+    answered = Signal(bool)
+
+    def __init__(self, cat_name: str):
+        super().__init__()
+        self.cat_name = cat_name
+        self.what = QLabel()
+        self.what.setStyleSheet(f"color: {DIM_HEX};")
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.detail.setFont(theme.mono(8.5))
+        self.detail.setStyleSheet("background: #060607; border: 1px solid #1d1f24;"
+                                  " border-radius: 10px; padding: 10px;")
+        deny = QPushButton("DENY")
+        allow = QPushButton("ALLOW")
+        allow.setObjectName("danger")
+        deny.clicked.connect(lambda: self.answered.emit(False))
+        allow.clicked.connect(lambda: self.answered.emit(True))
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(deny)
+        row.addWidget(allow)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 16)
+        lay.setSpacing(10)
+        lay.addWidget(_title("ALLOW THIS?", theme.DANGER_HEX))
+        lay.addWidget(self.what)
+        lay.addWidget(self.detail)
+        lay.addStretch()
+        lay.addLayout(row)
+        self.deny = deny
+
+    def set_request(self, text: str) -> None:
+        self.what.setText(f"{html.escape(self.cat_name)} wants to:")
+        self.detail.setText(text)
+
+
+# ======================================================================= hud
+SIZES = {"chat": (340, 400), "settings": (370, 500),
+         "confirm": (340, 230), "study": (360, 470)}
+CHAT_SIZES = {"small": (300, 330), "medium": (340, 400), "large": (420, 540)}
+
+
+class Hud(QWidget):
+    submitted = Signal(str)
+    mic_clicked = Signal()
+    clear_clicked = Signal()
+    settings_saved = Signal()
+    confirm_answered = Signal(bool)
+
+    def __init__(self, cat, settings, memory, tester):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                         | Qt.Tool | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setStyleSheet(theme.CSS)
+        self.setFixedSize(CANVAS_W, CANVAS_H)
+        self.cat = cat
+        self.s = settings
+        self.page = ""                       # "" = hidden
+        self.below = False
+        self.busy = False
+
+        self.bubble = BubblePage(settings.cat_name)
+        self.chat = ChatPage(settings.cat_name)
+        self.settings = SettingsPage(settings, tester)
+        self.confirm = ConfirmPage(settings.cat_name)
+        self.study = StudyPage()
+        self.stack = QStackedWidget(self)
+        self.pages = {"bubble": self.bubble, "chat": self.chat, "settings": self.settings,
+                      "confirm": self.confirm, "study": self.study}
+        for w in self.pages.values():
+            self.stack.addWidget(w)
+        self.fade = QGraphicsOpacityEffect(self.stack)
+        self.fade.setOpacity(0.0)
+        self.stack.setGraphicsEffect(self.fade)
+
+        # wiring
+        self.bubble.clicked.connect(lambda: self.open("chat"))
+        self.chat.submitted.connect(self.submitted)
+        self.chat.mic_clicked.connect(self.mic_clicked)
+        self.chat.clear_clicked.connect(self.clear_clicked)
+        self.chat.close_clicked.connect(self.close_panel)
+        self.settings.back.connect(lambda: self.open("chat"))
+        self.settings.saved.connect(self._saved)
+        self.study.back.connect(lambda: self.open("chat"))
+        self.confirm.answered.connect(self._answer)
+
+        # animation state
+        self.w = Spring(40, 240, 0.72)
+        self.h = Spring(16, 240, 0.72)
+        self.alpha = Spring(0, 160, 1.0)
+        self.content = Spring(0, 200, 1.0)
+        self.target = (40, 16)
+        self._prev_page = ""
+        self._bubble_timer = QTimer(self, singleShot=True, timeout=self._bubble_done)
+        self._clock = QElapsedTimer()
+        self._clock.start()
+        self._t = 0.0
+        self._frame = QTimer(self, interval=16, timeout=self._tick)
+        self._frame.setTimerType(Qt.PreciseTimer)
+
+    # ------------------------------------------------------------ public api
+    def is_open(self) -> bool:
+        return self.page in ("chat", "settings", "confirm", "study")
+
+    def say(self, text: str, seconds: float | None = None) -> None:
+        """Show a line above Kuro. If a panel is open, it goes in the chat."""
+        if self.is_open():
+            return
+        w, h = self.bubble.set_text(text)
+        self._show("bubble", (w, h))
+        if seconds is None:
+            seconds = min(max(3.5, len(text) / 14), 20.0)
+        self._bubble_timer.start(int(seconds * 1000))
+
+    def open(self, page: str) -> None:
+        if page == "settings":
+            self.settings.reload()
+        self._bubble_timer.stop()
+        if page == "chat":
+            size = CHAT_SIZES.get(self.s.chat_size, CHAT_SIZES["medium"])
+            self.chat.set_bubble_width(int(size[0] * 0.72))
+        else:
+            size = SIZES[page]
+        self._show(page, size)
+        self.activateWindow()
+        self.raise_()
+        if page == "chat":
+            self.chat.input.setFocus()
+
+    def toggle_chat(self) -> None:
+        if self.page == "chat":
+            self.close_panel()
+        else:
+            self.open("chat")
+
+    def close_panel(self) -> None:
+        if self.page == "confirm":
+            return                            # must be answered
+        self._show("", (40, 16))
+
+    def ask(self, text: str) -> None:
+        self.confirm.set_request(text)
+        self._prev_page = self.page if self.page not in ("", "bubble", "confirm") else ""
+        self.open("confirm")
+        self.confirm.deny.setFocus()
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        self.chat.set_busy(busy)
+        self.chat.set_status("thinking" if busy else "online")
+
+    # ------------------------------------------------------------ internals
+    def _show(self, page: str, size: tuple[int, int]) -> None:
+        if page != self.page:
+            self.content.value = 0.0          # fade the new page in once shaped
+        self.page = page
+        self.target = size
+        self.w.target, self.h.target = size
+        self.alpha.target = 1.0 if page else 0.0
+        if page:
+            self.stack.setCurrentWidget(self.pages[page])
+            self.stack.setFixedSize(*size)
+            self.setAttribute(Qt.WA_ShowWithoutActivating, page == "bubble")
+            if not self.isVisible():
+                self.w.value, self.h.value = 40, 16
+                self.follow()
+                self.show()
+        self._frame.start()
+        self._clock.restart()
+
+    def _bubble_done(self) -> None:
+        if self.page == "bubble":
+            self._show("", (40, 16))
+
+    def _saved(self) -> None:
+        self.settings_saved.emit()        # auto-save: stay on the settings page
+
+    def _answer(self, allowed: bool) -> None:
+        self.confirm_answered.emit(allowed)
+        back = self._prev_page
+        if back:
+            self.open(back)
+        else:
+            self._show("", (40, 16))
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() == Qt.Key_Escape:
+            if self.page == "confirm":
+                self.confirm.answered.emit(False)
+            else:
+                self.close_panel()
+        else:
+            super().keyPressEvent(e)
+
+    def panel_rect(self) -> QRectF:
+        w, h = max(20.0, self.w.value), max(10.0, self.h.value)
+        anchor = self.mapFromGlobal(self.cat.head_anchor())
+        scr = (QGuiApplication.screenAt(self.cat.head_anchor())
+               or QGuiApplication.primaryScreen()).availableGeometry()
+        lo = max(2.0, scr.left() - self.x() + 6.0)            # keep the whole panel on screen
+        hi = min(CANVAS_W - w - 2.0, scr.right() - self.x() - w - 6.0)
+        x = min(max(anchor.x() - w / 2, lo), max(lo, hi))
+        if self.below:
+            y = POINTER + 2
+        else:
+            y = CANVAS_H - h - POINTER - 2
+        return QRectF(x, y, w, h)
+
+    def follow(self) -> None:
+        """Pin the canvas so the panel sits just above (or below) Kuro's head."""
+        a = self.cat.head_anchor()
+        scr = (QGuiApplication.screenAt(a) or QGuiApplication.primaryScreen()).availableGeometry()
+        need = self.target[1] + POINTER + GAP + 6
+        self.below = a.y() - need < scr.top()
+        x = min(max(a.x() - CANVAS_W // 2, scr.left() - 40), scr.right() - CANVAS_W + 40)
+        if self.below:
+            y = self.cat.frameGeometry().bottom() - 4
+        else:
+            y = a.y() - CANVAS_H - GAP
+        self.move(int(x), int(y))
+
+    def _tick(self) -> None:
+        dt = min(self._clock.restart() / 1000.0, 1 / 20)
+        self._t += dt
+        for s in (self.w, self.h, self.alpha):
+            s.step(dt)
+        settled = abs(self.w.value - self.target[0]) < 18 and abs(self.h.value - self.target[1]) < 18
+        self.content.target = 1.0 if (self.page and settled) else 0.0
+        self.content.step(dt)
+        self.fade.setOpacity(max(0.0, min(1.0, self.content.value)) * max(0.0, min(1.0, self.alpha.value)))
+        r = self.panel_rect()
+        self.stack.move(int(r.x()), int(r.y()))
+        self.follow()
+        if not self.page and self.alpha.value < 0.02:
+            self._frame.stop()
+            self.hide()
+            return
+        # 60 fps while morphing, 30 once settled (the comet border is slow)
+        moving = abs(self.w.vel) + abs(self.h.vel) > 4 or abs(self.alpha.vel) > 0.05
+        want = 16 if moving else 33
+        if self._frame.interval() != want:
+            self._frame.setInterval(want)
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        a = max(0.0, min(1.0, self.alpha.value))
+        if a <= 0.01:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setOpacity(a)
+        r = self.panel_rect()
+        path = QPainterPath()
+        radius = min(16.0, r.height() / 2)
+        path.addRoundedRect(r, radius, radius)
+        # pointer toward Kuro's head
+        anchor = self.mapFromGlobal(self.cat.head_anchor())
+        px = min(max(anchor.x(), r.left() + 18), r.right() - 18)
+        tri = QPainterPath()
+        if self.below:
+            tri.moveTo(px - POINTER, r.top() + 1)
+            tri.lineTo(px, r.top() - POINTER)
+            tri.lineTo(px + POINTER, r.top() + 1)
+        else:
+            tri.moveTo(px - POINTER, r.bottom() - 1)
+            tri.lineTo(px, r.bottom() + POINTER)
+            tri.lineTo(px + POINTER, r.bottom() - 1)
+        tri.closeSubpath()
+        shape = path.united(tri)
+        theme.paint_matte(p, shape)
+
+        # the running light
+        color = theme.RED if self.page == "confirm" else theme.LIME
+        speed = 0.42 if (self.busy or self.page == "confirm") else 0.13
+        head = (self._t * speed) % 1.0
+        border = QPainterPath()
+        border.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+        theme.paint_comet(p, border, head, color, 0.16 if self.page != "bubble" else 0.24)
+        if self.busy or self.page == "confirm":
+            theme.paint_comet(p, border, (head + 0.5) % 1.0, color, 0.16)
+
+
+# ================================================================ radial menu
+class RadialMenu(QWidget):
+    """Icons that fan out in an arc above Kuro's head."""
+
+    def __init__(self, items: list[tuple[str, str, object]]):
+        super().__init__(None, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+        self.items = items
+        self.setFixedSize(260, 170)
+        self.centre = QPointF(130, 150)
+        self.radius = 92
+        self.springs = [Spring(0, 260, 0.6) for _ in items]
+        self._t = 0.0
+        self.hover = -1
+        self._timer = QTimer(self, interval=16, timeout=self._step)
+
+    def popup(self, head: QPoint) -> None:
+        self.move(int(head.x() - self.centre.x()), int(head.y() - self.centre.y() + 30))
+        self.show()
+        self._timer.start()
+
+    def _pos(self, i: int) -> QPointF:
+        n = len(self.items)
+        a = math.radians(-168 + 156 * (i / max(1, n - 1)))
+        k = max(0.0, self.springs[i].value)
+        return QPointF(self.centre.x() + math.cos(a) * self.radius * k,
+                       self.centre.y() + math.sin(a) * self.radius * k)
+
+    def _step(self) -> None:
+        self._t += 0.016
+        for i, s in enumerate(self.springs):
+            if self._t > i * 0.035:
+                s.target = 1.0
+            s.step(0.016)
+        self.update()
+
+    def _hit(self, pos: QPointF) -> int:
+        for i in range(len(self.items)):
+            c = self._pos(i)
+            if (c.x() - pos.x()) ** 2 + (c.y() - pos.y()) ** 2 < 22 ** 2:
+                return i
+        return -1
+
+    def mouseMoveEvent(self, e) -> None:
+        self.hover = self._hit(e.position())
+        self.setCursor(Qt.PointingHandCursor if self.hover >= 0 else Qt.ArrowCursor)
+
+    def mousePressEvent(self, e) -> None:
+        i = self._hit(e.position())
+        self.close()
+        if i >= 0:
+            QTimer.singleShot(0, self.items[i][2])
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        for i, (kind, label, _cb) in enumerate(self.items):
+            k = max(0.0, min(1.0, self.springs[i].value))
+            if k < 0.02:
+                continue
+            c = self._pos(i)
+            hov = i == self.hover
+            r = 19 * (0.6 + 0.4 * k) * (1.12 if hov else 1.0)
+            p.setOpacity(k)
+            path = QPainterPath()
+            path.addEllipse(c, r, r)
+            theme.paint_matte(p, path)
+            p.setPen(QPen(theme.lime(0.9 if hov else 0.25), 1.3 if hov else 1.0))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(c, r, r)
+            col = QColor(theme.DANGER_HEX) if (hov and kind == "power") else \
+                theme.LIME if hov else QColor("#c9ccd3")
+            theme.icon(p, kind, c, r * 0.95, col)
+        if self.hover >= 0:
+            p.setOpacity(1.0)
+            label = self.items[self.hover][1]
+            p.setFont(theme.mono(7.5, bold=True, spacing=135))
+            fm = p.fontMetrics()
+            w = fm.horizontalAdvance(label) + 18
+            box = QRectF(self.centre.x() - w / 2, self.centre.y() - 34, w, 20)
+            path = QPainterPath()
+            path.addRoundedRect(box, 10, 10)
+            theme.paint_matte(p, path)
+            p.setPen(theme.LIME)
+            p.drawText(box, Qt.AlignCenter, label)
