@@ -100,33 +100,66 @@ def is_music(t: Track, app_id: str = "") -> bool:
     return bool(classify(t, app_id))
 
 
-def audible(app_id: str) -> bool | None:
-    """Is that app producing sound right now? (Windows audio meters via
-    pycaw.) Hover previews on YouTube play muted, so they're silent.
-    None when it can't be measured."""
-    try:
-        from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
-    except Exception:
-        return None
-    want = (app_id or "").lower().removesuffix(".exe")
-    want = want.split("!")[-1].split(".")[-1] if "!" in want else want
-    hit, loud = False, False
-    try:
-        for sess in AudioUtilities.GetAllSessions():
-            proc = sess.Process
-            if proc is None:
-                continue
-            name = proc.name().lower().removesuffix(".exe")
-            if not want or not (name in want or want in name):
-                continue
-            hit = True
-            meter = sess._ctl.QueryInterface(IAudioMeterInformation)
-            if meter.GetPeakValue() > 0.0005:
-                loud = True
-                break
-    except Exception:
-        return None
-    return loud if hit else None
+class AudioMeter:
+    """Which apps are making sound right now, from Windows' audio meters
+    (pycaw). Runs on its OWN thread: COM must never be touched on the WinRT
+    media thread, or WinRT's replies can't get through and it hangs forever."""
+
+    def __init__(self, interval: float = 0.5, start: bool = True):
+        self.interval = interval
+        self.levels: dict[str, float] = {}       # process name -> last time it was loud
+        self.ok = False
+        self._stop = threading.Event()
+        if start:
+            threading.Thread(target=self._run, daemon=True, name="audio-meter").start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+        try:
+            from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+        except Exception as e:
+            log.info("audio meter off: %s", e)
+            return
+        while not self._stop.is_set():
+            try:
+                now = time.monotonic()
+                for sess in AudioUtilities.GetAllSessions():
+                    proc = sess.Process
+                    if proc is None:
+                        continue
+                    name = proc.name().lower().removesuffix(".exe")
+                    self.levels.setdefault(name, 0.0)
+                    meter = sess._ctl.QueryInterface(IAudioMeterInformation)
+                    if meter.GetPeakValue() > 0.0005:
+                        self.levels[name] = now
+                self.ok = True
+            except Exception as e:
+                if self.ok:
+                    log.info("audio meter read failed: %s", e)
+                self.ok = False
+            self._stop.wait(self.interval)
+
+    def audible(self, app_id: str, within: float = 1.5) -> bool | None:
+        """Has that app made sound in the last moment? None = can't tell."""
+        if not self.ok:
+            return None
+        want = (app_id or "").lower().removesuffix(".exe")
+        if "!" in want:                          # Store apps: "...!Spotify"
+            want = want.split("!")[-1].split(".")[-1]
+        if not want:
+            return None
+        now = time.monotonic()
+        hits = [t for name, t in list(self.levels.items()) if name in want or want in name]
+        if not hits:
+            return None
+        return any(now - t <= within for t in hits)
 
 
 def source_name(app_id: str) -> str:
@@ -150,11 +183,13 @@ class MusicWatcher(QObject):
         self.available = False
         self._pending: dict | None = None
         self._stop = threading.Event()
+        self.meter = AudioMeter(start=start)
         if start:
             threading.Thread(target=self._run, daemon=True, name="music").start()
 
     def stop(self) -> None:
         self._stop.set()
+        self.meter.stop()
 
     def seek(self, seconds: float, timeout: float = 4.0) -> bool:
         """Ask the playing app to jump to `seconds`. True if it accepted.
@@ -245,11 +280,7 @@ class MusicWatcher(QObject):
             log.info("music mode off (WinRT media control unavailable: %s)", e)
             return
         self.available = True
-        try:
-            import comtypes                          # audio meters need COM on this thread
-            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
-        except Exception:
-            pass
+        log.info("music watcher on")
         try:
             asyncio.run(self._loop(Manager))
         except Exception:
@@ -261,11 +292,13 @@ class MusicWatcher(QObject):
         self._loop_obj = asyncio.get_running_loop()
         while not self._stop.is_set():
             try:
-                self.offer(await self._read(mgr))
+                # a stuck WinRT call must never freeze music mode silently
+                self.offer(await asyncio.wait_for(self._read(mgr), 8))
             except Exception as e:                   # a session closed mid-read, etc.
-                if str(e) != getattr(self, "_last_err", ""):
-                    self._last_err = str(e)
-                    log.info("music read failed: %s", e)
+                msg = f"{type(e).__name__}: {e}"
+                if msg != getattr(self, "_last_err", ""):
+                    self._last_err = msg
+                    log.info("music read failed: %s", msg)
             await asyncio.sleep(self.interval)
 
     async def _read(self, mgr) -> Track | None:
@@ -315,7 +348,7 @@ class MusicWatcher(QObject):
         except Exception:
             pass
         if track.playing:
-            track.audible = audible(app_id)
+            track.audible = self.meter.audible(app_id)
         if props.thumbnail and not (cur and cur.key == track.key and cur.art):
             track.art = await self._thumbnail(props.thumbnail)
         return track

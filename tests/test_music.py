@@ -157,3 +157,23 @@ def test_same_track_pause_resume_is_instant():
 def test_classify_music(track, verdict):
     from app.music import classify
     assert classify(track) is verdict
+
+
+def test_audio_meter_matches_apps_and_forgets_old_sound():
+    import time as _t
+    from app.music import AudioMeter
+    m = AudioMeter(start=False)
+    assert m.audible("Chrome") is None                          # no data yet
+    m.ok = True
+    m.levels = {"chrome": _t.monotonic(), "spotify": _t.monotonic() - 10}
+    assert m.audible("Chrome") is True
+    assert m.audible("SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify") is False
+    assert m.audible("Opera GX Stable") is None                 # never seen: can't tell
+
+
+def test_music_thread_never_imports_com():
+    """comtypes on the WinRT thread made every media read hang (STA, no pump)."""
+    import inspect
+    from app import music
+    src = inspect.getsource(music.MusicWatcher)
+    assert "comtypes" not in src and "pycaw" not in src

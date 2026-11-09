@@ -404,6 +404,8 @@ def set_volume(action: str, level: int | None = None) -> str:
         if level is None or not 0 <= level <= 100:
             raise ToolError("level must be 0-100")
         try:
+            import comtypes
+            comtypes.CoInitialize()               # tools run on a worker thread
             from pycaw.pycaw import AudioUtilities
             vol = AudioUtilities.GetSpeakers().EndpointVolume
             vol.SetMasterVolumeLevelScalar(level / 100, None)
