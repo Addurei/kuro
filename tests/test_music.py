@@ -83,3 +83,64 @@ def test_now_playing_hud_spins_and_hides(qapp, tmp_path):
     paused_hud = NowPlaying(FakeCat(), on_toggle=lambda: None, on_next=lambda: None)
     paused_hud.set_track(Track("Old", "Song", "Spotify", False))  # paused at startup
     assert paused_hud.alpha.target == 0 and not paused_hud.isVisible()
+
+
+# ------------------------------------------------------------ previews & DJ mode
+def test_hover_preview_never_reaches_kuro():
+    """A muted YouTube hover preview plays for a moment: ignored."""
+    w = MusicWatcher(start=False)
+    seen = []
+    w.changed.connect(seen.append)
+    song = Track("Midnight City", "M83", "Browser", True, audible=True)
+    w.offer(song, now=0)
+    w.offer(song, now=3.5)                                       # confirmed
+    assert [t.title for t in seen] == ["Midnight City"]
+    preview = Track("How Bridges Are Built", "Docs", "Browser", True, audible=True)
+    w.offer(preview, now=10)                                     # hover...
+    w.offer(preview, now=11.5)
+    w.offer(song, now=12)                                        # ...cursor moved on
+    w.offer(preview, now=13)                                     # timer restarts
+    w.offer(song, now=14)
+    assert [t.title for t in seen] == ["Midnight City"]
+
+
+def test_silent_preview_never_confirms_but_real_song_does():
+    w = MusicWatcher(start=False)
+    seen = []
+    w.changed.connect(seen.append)
+    muted = Track("Some Vlog", "Someone", "Browser", True, audible=False)
+    for t in range(0, 12):
+        w.offer(muted, now=t)
+    assert seen == []
+    nxt = Track("Wait", "M83", "Spotify", True, audible=None)   # can't measure: time only
+    w.offer(nxt, now=20)
+    w.offer(nxt, now=23.1)
+    assert [t.title for t in seen] == ["Wait"]
+
+
+def test_same_track_pause_resume_is_instant():
+    w = MusicWatcher(start=False)
+    seen = []
+    w.changed.connect(seen.append)
+    song = Track("Wait", "M83", "Spotify", True)
+    w.offer(song, now=0)
+    w.offer(song, now=3.2)
+    w.offer(Track("Wait", "M83", "Spotify", False), now=4)
+    assert [t.playing for t in seen] == [True, False]
+
+
+@pytest.mark.parametrize("track, verdict", [
+    (Track("Never Gonna Give You Up (Official Music Video)", "Rick Astley", "Browser"), True),
+    (Track("Good News", "Mac Miller", "Spotify"), True),
+    (Track("Good News", "Mac Miller - Topic", "Browser"), True),
+    (Track("NIKI - Every Summertime (Lyrics)", "Vibe Lyrics", "Browser"), True),
+    (Track("Anything", "x", "Browser", album="Blonde"), True),
+    (Track("Episode 12: Habits", "Huberman Lab", "Spotify"), False),
+    (Track("The Deepest Hole Ever Dug | Documentary", "Real Stories", "Browser"), False),
+    (Track("Skip this", "Brand", "Browser", duration=15), False),
+    (Track("Building a PC: full tutorial", "Linus", "Browser", duration=1500), False),
+    (Track("Blinding Lights", "The Weeknd", "Browser", duration=200), None),   # brain decides
+])
+def test_classify_music(track, verdict):
+    from app.music import classify
+    assert classify(track) is verdict

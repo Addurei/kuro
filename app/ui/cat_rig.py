@@ -116,6 +116,9 @@ class Pose:
     jiggle: float = 0.0        # chubby jelly wobble (springy, +/-)
     paw_raise: float = 0.0     # 0..1 lifts the near front paw to his mouth (grooming)
     lick: float = 0.0          # 0..1 little tongue out
+    blep: float = 0.0          # 0..1 sleepy tongue tip poking out
+    bubble: float = 0.0        # 0..1 sleeping nose bubble
+    pop: float = 0.0           # 1..0 right after the bubble pops
     knead: float = 0.0         # 0..1 "making biscuits" with the front paws
     bat: float = 0.0           # 0..1 near front paw reaches out (batting at your cursor)
     groom_x: float = 0.0       # where the grooming paw goes (licking / washing his face)
@@ -555,6 +558,7 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
     p.save()
     p.setTransform(head_tf, True)
     _whiskers(p, pose, psi, head_local)
+    _nose_bubble(p, pose, psi)
     _headphones(p, pose, psi, head_rx)
     p.restore()
 
@@ -600,7 +604,8 @@ def _face(p: QPainter, pose: Pose, psi: float) -> None:
         if f > 0.15:
             g = QRadialGradient(QPointF(bx, by), 9)
             g.setColorAt(0, QColor(BLUSH.red(), BLUSH.green(), BLUSH.blue(),
-                                   int((48 + 40 * pose.happy + 80 * pose.expr_amt * (pose.expr == 'love')) * min(1, f * 1.5))))
+                                   int((48 + 40 * pose.happy + 46 * pose.sleep
+                                        + 80 * pose.expr_amt * (pose.expr == 'love')) * min(1, f * 1.5))))
             g.setColorAt(1, QColor(BLUSH.red(), BLUSH.green(), BLUSH.blue(), 0))
             p.setBrush(g)
             p.drawEllipse(QPointF(bx, by), 9 * min(1.0, f + 0.3), 5.5)
@@ -627,6 +632,18 @@ def _face(p: QPainter, pose: Pose, psi: float) -> None:
         p.setBrush(QColor(236, 128, 150))
         p.drawEllipse(QPointF(nx + 1.2 * math.sin(psi), my + 3.2), 2.4 * w, 2.6 * pose.lick)
     if pose.sleep > 0.6:
+        # asleep: a tiny soft ω, and now and then the tip of his tongue (blep)
+        if pose.blep > 0.02:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(236, 128, 150))
+            p.drawEllipse(QPointF(nx, my + 2.0 + 1.2 * pose.blep), 1.7 * w, 1.9 * pose.blep)
+        s_ = 2.3 * w
+        p.setPen(QPen(QColor(150, 152, 160), 1.3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        m = QPainterPath(QPointF(nx - 2 * s_, my))
+        m.quadTo(QPointF(nx - s_, my + 2.2), QPointF(nx, my))
+        m.quadTo(QPointF(nx + s_, my + 2.2), QPointF(nx + 2 * s_, my))
+        p.drawPath(m)
         return
     if pose.expr == "surprised" and pose.expr_amt > 0.4:        # little "o"
         p.setPen(QPen(MOUTH, 1.5))
@@ -686,6 +703,38 @@ def _whiskers(p: QPainter, pose: Pose, psi: float, head: QPainterPath) -> None:
             p.setPen(QPen(col, 1.15, Qt.SolidLine, Qt.RoundCap))
             p.setBrush(Qt.NoBrush)
             p.drawPath(path)
+
+
+def _nose_bubble(p: QPainter, pose: Pose, psi: float) -> None:
+    """The classic sleepy-cartoon snot bubble: grows from his nose with each
+    breath, wobbles, then pops into a few tiny droplets."""
+    nx, ny, f = on_head(0, -40, psi)
+    if f < 0.2:
+        return
+    d = 1.0 if psi >= 0 else -1.0                 # bubbles out toward where he faces
+    if pose.bubble > 0.04:
+        r = 1.5 + 10.0 * pose.bubble
+        wob = 0.06 * math.sin(pose.t * 5.3)
+        c = QPointF(nx + d * (1.2 + r * 0.72), ny + 1.5 + r * 0.42)
+        g = QRadialGradient(QPointF(c.x() - r * 0.3, c.y() - r * 0.35), r * 1.25)
+        g.setColorAt(0.0, QColor(235, 250, 255, 70))
+        g.setColorAt(0.75, QColor(190, 225, 245, 38))
+        g.setColorAt(1.0, QColor(200, 235, 255, 90))
+        p.setBrush(g)
+        p.setPen(QPen(QColor(215, 238, 255, 140), 0.9))
+        p.drawEllipse(c, r * (1 + wob), r * (1 - wob))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 200))       # the shine
+        p.drawEllipse(QPointF(c.x() - r * 0.38, c.y() - r * 0.42), r * 0.2, r * 0.13)
+    if pose.pop > 0.01:
+        k = 1 - pose.pop
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(215, 238, 255, int(170 * pose.pop)))
+        c0 = QPointF(nx + d * 8, ny + 5)
+        for ang in (-50, -10, 30, 70, 120):
+            a = math.radians(ang)
+            p.drawEllipse(QPointF(c0.x() + d * math.cos(a) * (4 + 9 * k),
+                                  c0.y() - math.sin(a) * (4 + 9 * k)), 1.2, 1.2)
 
 
 def _heart(cx: float, cy: float, r: float) -> QPainterPath:
@@ -782,7 +831,7 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             slant = side * 3.0 if annoyed else 0.0           # grumpy brow tilt
             lid_y = ey - ry + 2 * ry * lid
             low_y = ey + ry - close * (1 - LID_MEET) * ry * 1.03
-            sag = 2.5 + 2.5 * close
+            sag = 2.5 + 2.5 * close + 4.0 * pose.sleep * (1 - close)   # drowsy: soft, round lids
             # the eye is only drawn BETWEEN the eyelid lines, so the lids are
             # the head itself (same shading), not painted patches
             eye_shape = QPainterPath()
@@ -801,7 +850,12 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 below.quadTo(QPointF(ex, low_y + sag), QPointF(ex - rx - 2, low_y))
                 below.closeSubpath()
                 eye_shape = eye_shape.subtracted(below)
+            # the last part of closing cross-fades into the closed line, so
+            # there's never a thin lime "goggles" slit between open and shut
+            fade = 1.0 - max(0.0, min(1.0, (close - 0.45) / 0.2))
+            base_op = p.opacity()
             p.save()
+            p.setOpacity(base_op * fade)
             p.setClipPath(eye_shape, Qt.IntersectClip)
             p.setPen(Qt.NoPen)
             p.setBrush(EYE)
@@ -817,7 +871,7 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             if k > 1:
                 lx, ly = lx / k, ly / k
             px = ex + lx * cf + 1.8 * math.sin(psi)            # looks where he faces
-            py = ey + ly * opened
+            py = ey + ly * opened + 3.0 * pose.sleep * opened       # sleepy eyes sink
             p.setBrush(PUPIL)
             p.drawEllipse(QPointF(px, py), prx, pry)
             if opened > 0.55:
@@ -832,6 +886,7 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 edge = QPainterPath(QPointF(ex - rx, lid_y - slant))
                 edge.quadTo(QPointF(ex, lid_y + sag), QPointF(ex + rx, lid_y + slant))
                 p.save()
+                p.setOpacity(base_op * fade)
                 clip = QPainterPath()
                 clip.addEllipse(c, rx + 0.5, ry + 0.5)
                 p.setClipPath(clip, Qt.IntersectClip)
@@ -839,8 +894,8 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 p.setPen(QPen(QColor(0, 0, 0, 150), 2.2, Qt.SolidLine, Qt.RoundCap))
                 p.drawPath(edge)
                 p.restore()
-                if close > 0.6:                              # becomes the closed-eye line
-                    a = min(1.0, (close - 0.6) / 0.33)
+                if close > 0.45:                             # becomes the closed-eye line
+                    a = min(1.0, (close - 0.45) / 0.35)
                     _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side, slant,
                                  QColor(186, 226, 92, int(255 * a)))
                     p.setPen(Qt.NoPen)

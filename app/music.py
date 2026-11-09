@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
+import time
 from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Signal
@@ -29,6 +31,10 @@ class Track:
     source: str = ""               # "Spotify", "Browser", or the app id
     playing: bool = False
     art: bytes | None = None       # album / video thumbnail (JPEG or PNG bytes)
+    album: str = ""                # YouTube Music / Spotify fill this; plain YouTube doesn't
+    kind: int | None = None        # Windows' guess: 1 music, 2 video (often missing)
+    duration: float = 0.0          # seconds, 0 = unknown
+    audible: bool | None = None    # is that app actually making sound? None = can't tell
 
     @property
     def key(self) -> tuple[str, str]:
@@ -39,6 +45,78 @@ class Track:
         who = f" by {self.artist}" if self.artist else ""
         where = f" on {self.source}" if self.source else ""
         return f"'{self.title}'{who} ({state}{where})"
+
+
+# ------------------------------------------------------------ is it music?
+MUSIC_APPS = ("spotify", "zunemusic", "applemusic", "itunes", "deezer", "tidal",
+              "amazonmusic", "musicbee", "foobar", "aimp", "winamp", "soundcloud")
+NOT_MUSIC = re.compile(
+    r"\b(advert\w*|sponsored|\bad\b|documentar\w*|trailer|teaser|podcast|episode|"
+    r"ep\.? ?\d+|review|tutorial|how to|explained|vlog|gameplay|walkthrough|let's play|"
+    r"reaction|reacts?|news|interview|lecture|course|lesson|full movie|highlights|"
+    r"unboxing|asmr|commentary|analysis|recap|stream|livestream|vod|shorts?)\b", re.I)
+MUSIC_WORDS = re.compile(
+    r"(official (music )?video|official audio|official lyric|lyric video|lyrics?\b|"
+    r"visuali[sz]er|\bm/?v\b|\(audio\)|\[audio\]|\bft\.|\bfeat\.|\bremix\b|\bcover\b|"
+    r"acoustic|live session|karaoke|instrumental|\bost\b|soundtrack|slowed|reverb|"
+    r"sped up|nightcore|lo-?fi|\bbeats?\b|music video|\bsong\b|\bopm\b|\bk-?pop\b)", re.I)
+MUSIC_ARTIST = re.compile(r"(- topic$|vevo|records\b|music\b|official\b|\bband\b)", re.I)
+
+
+PODCAST = re.compile(r"\b(podcast|episode|ep\.? ?\d+|chapter \d+|audiobook)\b", re.I)
+STRONG_MUSIC = re.compile(r"(official (music |lyric )?(video|audio)|lyric video|visuali[sz]er|"
+                          r"\(audio\)|\[audio\]|music video)", re.I)
+STRONG_ARTIST = re.compile(r"(- topic$|vevo)", re.I)
+
+
+def classify(t: Track, app_id: str = "") -> bool | None:
+    """True = a song / music video, False = anything else (ads, documentaries,
+    talk, games...), None = can't tell from the metadata alone."""
+    title, artist = t.title or "", t.artist or ""
+    if t.duration and t.duration < 45:            # ads, Shorts, sound bites
+        return False
+    if (STRONG_MUSIC.search(title) or STRONG_ARTIST.search(artist)
+            or t.album.strip() or t.kind == 1):
+        return True
+    low = (app_id or getattr(t, "app_id", "") or t.source).lower()
+    if any(m in low for m in MUSIC_APPS):          # Spotify etc.: music unless a podcast
+        return not PODCAST.search(f"{title} {artist}")
+    if NOT_MUSIC.search(title):
+        return False
+    if t.duration and t.duration > 20 * 60 and not MUSIC_WORDS.search(title):
+        return False                              # long talks / movies (mixes say "mix")
+    if MUSIC_WORDS.search(title) or MUSIC_ARTIST.search(artist):
+        return True
+    return None                                   # unsure: the brain decides
+
+
+def audible(app_id: str) -> bool | None:
+    """Is that app producing sound right now? (Windows audio meters via
+    pycaw.) Hover previews on YouTube play muted, so they're silent.
+    None when it can't be measured."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+    except Exception:
+        return None
+    want = (app_id or "").lower().removesuffix(".exe")
+    want = want.split("!")[-1].split(".")[-1] if "!" in want else want
+    hit, loud = False, False
+    try:
+        for sess in AudioUtilities.GetAllSessions():
+            proc = sess.Process
+            if proc is None:
+                continue
+            name = proc.name().lower().removesuffix(".exe")
+            if not want or not (name in want or want in name):
+                continue
+            hit = True
+            meter = sess._ctl.QueryInterface(IAudioMeterInformation)
+            if meter.GetPeakValue() > 0.0005:
+                loud = True
+                break
+    except Exception:
+        return None
+    return loud if hit else None
 
 
 def source_name(app_id: str) -> str:
@@ -60,6 +138,7 @@ class MusicWatcher(QObject):
         self.interval = interval
         self.current: Track | None = None
         self.available = False
+        self._pending: dict | None = None
         self._stop = threading.Event()
         if start:
             threading.Thread(target=self._run, daemon=True, name="music").start()
@@ -98,6 +177,40 @@ class MusicWatcher(QObject):
         # WinRT positions are in 100-nanosecond ticks
         return bool(await sess.try_change_playback_position_async(int(seconds * 10_000_000)))
 
+    # A new song/video must keep playing (and, where we can measure it, be
+    # audible) for this long before Kuro reacts. Hovering a thumbnail on
+    # YouTube plays a muted preview for a few seconds: that never counts.
+    CONFIRM = 3.0
+
+    def offer(self, track: Track | None, now: float | None = None) -> None:
+        """A raw reading from Windows. Passes it on only once it's clearly
+        what you're actually playing."""
+        now = time.monotonic() if now is None else now
+        cur = self.current
+        if track is None:
+            self._pending = None
+            self.feed(None)
+            return
+        if cur is not None and track.key == cur.key:
+            self._pending = None
+            self.feed(track)                            # same thing: pause/resume/art
+            return
+        if not track.playing:
+            if cur is None:                             # paused at startup: remember quietly
+                self.feed(track)
+            elif not cur.playing and getattr(self, "_pending", None) is None:
+                self.feed(track)                        # both paused: follow Windows
+            return
+        p = getattr(self, "_pending", None)
+        if p is None or p["key"] != track.key:
+            self._pending = {"key": track.key, "since": now, "heard": track.audible}
+            return
+        if track.audible:
+            p["heard"] = True
+        if now - p["since"] >= self.CONFIRM and p["heard"] is not False:
+            self._pending = None
+            self.feed(track)
+
     # Used by tests and by the thread below.
     def feed(self, track: Track | None) -> None:
         old = self.current
@@ -131,7 +244,7 @@ class MusicWatcher(QObject):
         self._loop_obj = asyncio.get_running_loop()
         while not self._stop.is_set():
             try:
-                self.feed(await self._read(mgr))
+                self.offer(await self._read(mgr))
             except Exception as e:                   # a session closed mid-read, etc.
                 log.debug("music read failed: %s", e)
             await asyncio.sleep(self.interval)
@@ -146,18 +259,45 @@ class MusicWatcher(QObject):
             return getattr(st, "name", "") == "PLAYING" or int(st) == 4
 
         playing = [s for s in sessions if is_playing(s)]
-        sess = playing[0] if playing else mgr.get_current_session()
+        cur = self.current
+        sess, props = None, None
+        # stick with what we're already showing while it's still playing, so
+        # another tab or a hover preview can't steal the miniplayer
+        if cur is not None and len(playing) > 1:
+            for s_ in playing:
+                pr = await s_.try_get_media_properties_async()
+                if (pr.title or "").strip() == cur.title:
+                    sess, props = s_, pr
+                    break
+        if sess is None:
+            sess = playing[0] if playing else mgr.get_current_session()
         if sess is None:
             return None
-        props = await sess.try_get_media_properties_async()
+        if props is None:
+            props = await sess.try_get_media_properties_async()
         title = (props.title or "").strip()
         if not title:
             return None
+        app_id = sess.source_app_user_model_id or ""
         track = Track(title=title, artist=(props.artist or "").strip(),
-                      source=source_name(sess.source_app_user_model_id),
-                      playing=bool(playing))
-        old = self.current
-        if props.thumbnail and not (old and old.key == track.key and old.art):
+                      source=source_name(app_id), playing=is_playing(sess),
+                      album=(getattr(props, "album_title", "") or "").strip())
+        track.app_id = app_id  # type: ignore[attr-defined]
+        try:
+            kind = props.playback_type
+            track.kind = int(getattr(kind, "value", kind)) if kind is not None else None
+        except Exception:
+            pass
+        try:
+            tl = sess.get_timeline_properties()
+            span = tl.end_time - tl.start_time
+            track.duration = max(0.0, span.total_seconds() if hasattr(span, "total_seconds")
+                                 else float(span) / 10_000_000)
+        except Exception:
+            pass
+        if track.playing:
+            track.audible = audible(app_id)
+        if props.thumbnail and not (cur and cur.key == track.key and cur.art):
             track.art = await self._thumbnail(props.thumbnail)
         return track
 

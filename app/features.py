@@ -415,7 +415,7 @@ class FeaturesMixin:
             self.player.hide()
         else:
             if self.music.current and self.music.current.playing:
-                self.player.set_track(self.music.current)
+                self._on_music(self.music.current)      # only re-shows real music
             held, self._held = self._held, []
             if held:
                 QTimer.singleShot(900, lambda: self.say(

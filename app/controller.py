@@ -20,7 +20,7 @@ from . import scan
 from .config import Settings, app_root, data_dir
 from .features import FeaturesMixin
 from .memory import HabitLog, MemoryStore, Reflector
-from .music import MusicWatcher
+from .music import MusicWatcher, classify
 from . import providers
 from .reminders import ReminderStore
 from .tools import Tool, build_tools
@@ -61,6 +61,7 @@ class Signals(QObject):
     briefing = Signal(str)
     google_status = Signal(bool, str)
     wake = Signal(str)
+    music_checked = Signal()
 
 
 class _ConfirmJob:
@@ -150,6 +151,9 @@ class Controller(FeaturesMixin):
         self.cat.moved.connect(self.hud.follow)
         self.cat.moved.connect(self.player.follow)
         self.music.changed.connect(self._on_music)
+        self._music_verdicts: dict[tuple[str, str], bool] = {}
+        self._music_asking: set[tuple[str, str]] = set()
+        self.sig.music_checked.connect(lambda: self._on_music(self.music.current))
         self._hud_was_open = False
         self._hud_watch = QTimer(timeout=self._watch_hud)
         self._hud_watch.start(200)
@@ -293,7 +297,11 @@ class Controller(FeaturesMixin):
 
     def _settle(self) -> None:
         if not self.busy and self.cat.state in ("talking", "happy", "listening"):
-            self.cat.set_state("idle")
+            # during a focus nap, go straight from the happy face to dozing off
+            # (via "idle" his eyes would pop wide open for a second first)
+            napping = (self.focus.active and self.focus.phase == "focus"
+                       and self.s.focus_nap and not self.hud.is_open())
+            self.cat.set_state("sleeping" if napping else "idle")
 
     def _can_wander(self) -> bool:
         return (self.s.wander and not self.busy and not self.hud.is_open()
@@ -325,11 +333,47 @@ class Controller(FeaturesMixin):
         menu.popup(head)
 
     def _on_music(self, track) -> None:
-        playing = bool(track and track.playing)
+        """Miniplayer + DJ mode, but only for actual music. Ads, documentaries,
+        vlogs and the like are left alone."""
+        is_music = bool(track) and self._is_music(track)
+        playing = bool(track and track.playing and is_music)
         self.cat.set_music(playing)
-        self.player.set_track(track if track else None)
+        self.player.set_track(track if is_music else None)
         if playing:
             self._touch()                     # music wakes him up
+
+    def _is_music(self, track) -> bool:
+        key = track.key
+        if key in self._music_verdicts:
+            return self._music_verdicts[key]
+        verdict = classify(track)
+        if verdict is not None:
+            self._music_verdicts[key] = verdict
+            return verdict
+        # unclear from the title alone ("Blinding Lights" by The Weeknd): ask
+        # the brain once, quietly, on the light model; nothing shows meanwhile
+        if self.s.ready and key not in self._music_asking:
+            self._music_asking.add(key)
+            mins, secs = divmod(int(track.duration or 0), 60)
+            prompt = ("Is this media a song or a music video (yes), or something else "
+                      "like a regular video, ad, podcast, documentary, vlog or game (no)? "
+                      "Answer with one word: yes or no.\n"
+                      f"Title: {track.title}\nChannel/artist: {track.artist or '?'}\n"
+                      f"Playing in: {track.source or '?'}\n"
+                      f"Length: {f'{mins}:{secs:02d}' if track.duration else 'unknown'}")
+
+            def work():
+                try:
+                    ans = self.brain.provider.complete(prompt, max_tokens=16, light=True)
+                    self._music_verdicts[key] = ans.strip().lower().startswith("y")
+                except Exception as e:
+                    log.info("music check skipped: %s", e)
+                    self._music_verdicts[key] = False
+                if len(self._music_verdicts) > 300:
+                    self._music_verdicts.clear()
+                self.sig.music_checked.emit()
+            threading.Thread(target=work, daemon=True, name="music-check").start()
+        return False
 
     def _media(self, action: str) -> None:
         tool = self.tools.get("media")

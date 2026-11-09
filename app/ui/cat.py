@@ -100,6 +100,7 @@ class CatWidget(QWidget):
             "jig": S(0, 140, 0.16),            # chubby belly wobble
             "paw": S(0, 34, 0.92), "lick": S(0, 50, 1.0),
             "gx": S(0, 48, 0.88), "gy": S(0, 48, 0.88),
+            "blep": S(0, 30, 1.0),             # sleepy tongue tip
         }
         self._idle_in = random.uniform(12, 25)
         # expressions, cursor attention, music
@@ -143,6 +144,13 @@ class CatWidget(QWidget):
         self._twitch_in = random.uniform(3, 8)
         self._glance_in = random.uniform(4, 9)
         self._glance = 0.0
+        # falling asleep / asleep
+        self._doze_t0 = -99.0           # when he started nodding off
+        self._bubble = 0.0              # nose bubble size 0..1
+        self._bubble_life = 7.0
+        self._pop_t = -99.0
+        self._blep_in = random.uniform(8, 14)
+        self._blep_until = 0.0
 
         # movement
         self.mode = "rest"                 # rest | walk | drag | fly | blink
@@ -184,6 +192,9 @@ class CatWidget(QWidget):
         if state == self.state:
             return
         prev, self.state = self.state, state
+        if state == "sleeping":
+            self._doze_t0 = self.t              # nod off, don't just shut
+            self._bubble = 0.0
         if state == "happy":
             self.hop(140)
         elif state == "listening":
@@ -341,6 +352,7 @@ class CatWidget(QWidget):
         self._blinks(dt)
         self._slow_blinks(dt)
         self._twitches(dt)
+        self._asleep(dt)
         if self.expr and self.t > self._expr_until:
             self.expr = ""
         # save power: 30 fps when nothing much is moving
@@ -597,6 +609,47 @@ class CatWidget(QWidget):
               and 2.5 < self._cursor_still < 2.5 + 1 / 30):
             self._slow_blink_t = 0.0                    # an affectionate slow blink
 
+    # ---- sleeping ---------------------------------------------------
+    # nodding off: (seconds since he got sleepy, how shut his eyes are)
+    DOZE = ((0.0, 0.0), (0.8, 0.38), (1.3, 0.18), (2.1, 0.42), (2.6, 0.26), (3.1, 0.4), (3.7, 1.0))
+
+    def _doze_amount(self) -> float:
+        """How shut his eyes are while falling asleep: heavy lids, a sleepy
+        fight to stay awake, then he drifts off. Eased keyframes, not a spring."""
+        u = self.t - self._doze_t0
+        keys = self.DOZE
+        if u >= keys[-1][0]:
+            return 1.0
+        for (t0, v0), (t1, v1) in zip(keys, keys[1:]):
+            if u <= t1:
+                x = (u - t0) / (t1 - t0)
+                x = x * x * (3 - 2 * x)
+                return v0 + (v1 - v0) * x
+        return 1.0
+
+    def _asleep(self, dt: float) -> None:
+        """Nose bubble that swells with each breath and pops, a little tongue
+        blep now and then, and a dreamy ear flick."""
+        sp = self.sp
+        deep = self.state == "sleeping" and self.t - self._doze_t0 > 3.6
+        sp["blep"].target = 0.0
+        if not deep:
+            self._bubble = max(0.0, self._bubble - dt * 3)
+            return
+        self._bubble += dt / self._bubble_life
+        if self._bubble >= 1.0:                      # pop!
+            self._bubble = 0.0
+            self._pop_t = self.t
+            self._bubble_life = random.uniform(6.5, 11.0)
+            sp["tw_l" if random.random() < 0.5 else "tw_r"].kick(110)
+            sp["squash"].kick(0.35)
+        self._blep_in -= dt
+        if self._blep_in <= 0:
+            self._blep_until = self.t + random.uniform(2.0, 3.5)
+            self._blep_in = random.uniform(14, 26)
+        if self.t < self._blep_until:
+            sp["blep"].target = 1.0
+
     def _blinks(self, dt: float) -> None:
         if self._blink >= 0:
             self._blink += dt / 0.16
@@ -629,6 +682,8 @@ class CatWidget(QWidget):
                 key = random.choice(("tw_l", "tw_r"))
                 self.sp[key].kick(random.choice((-1, 1)) * 140)
                 self.sp["whisk"].kick(random.choice((-1, 1)) * 90)
+            elif self.state == "sleeping" and random.random() < 0.6:
+                self.sp[random.choice(("tw_l", "tw_r"))].kick(random.choice((-1, 1)) * 70)
 
     def _idle_actions(self, dt: float) -> None:
         """Little things a cat does when nothing's happening."""
@@ -975,6 +1030,10 @@ class CatWidget(QWidget):
         chatter = abs(math.sin(t * 8.5)) * talk
         sleep = sp["sleep"].value
         breath = math.sin(t * (1.3 if sleep > 0.5 else 2.4)) * (1 + sleep)
+        # eyes: the nodding-off curve while asleep, the spring when waking up
+        shut = self._doze_amount() if self.state == "sleeping" else max(0.0, min(1.0, sleep))
+        pop = max(0.0, 1 - (t - self._pop_t) / 0.35)
+        bubble = self._bubble * (0.82 + 0.18 * breath / 2) if self._bubble > 0 else 0.0
         gait = max(0.0, min(1.0, sp["gait"].value))
         return Pose(
             # always facing you: never more than a three-quarter turn
@@ -987,8 +1046,10 @@ class CatWidget(QWidget):
             lean=sp["lean"].value,
             lift=self.hop_y + max(0.0, sp["hover"].value),
             head_tilt=sp["tilt"].value, head_dx=sp["hlag_x"].value,
-            head_dy=sp["hlag_y"].value - 1.8 * chatter + sp["bob"].value, breath=breath,
-            eye_open=max(0.0, (1 - blink) * (1 - sleep) * (1 - 0.15 * chatter)
+            head_dy=(sp["hlag_y"].value - 1.8 * chatter + sp["bob"].value
+                     + (3.0 * shut * (1 - sleep) if self.state == "sleeping" else 0.0)),
+            breath=breath,
+            eye_open=max(0.0, (1 - blink) * (1 - shut) * (1 - 0.15 * chatter)
                          * (1 - self._slow_blink_amount())),
             eye_scale=sp["eye_scale"].value, happy=max(0.0, sp["happy"].value),
             look_x=sp["look_x"].value, look_y=sp["look_y"].value, ear=sp["ear"].value,
@@ -1004,6 +1065,8 @@ class CatWidget(QWidget):
             jiggle=sp["jig"].value,
             paw_raise=max(0.0, min(1.0, sp["paw"].value)),
             lick=max(0.0, min(1.0, sp["lick"].value)),
+            blep=max(0.0, min(1.0, sp["blep"].value)),
+            bubble=bubble, pop=pop,
             groom_x=sp["gx"].value, groom_y=sp["gy"].value,
             yawn=max(0.0, min(1.0, sp["yawn"].value)),
             whisker=sp["whisk"].value,
