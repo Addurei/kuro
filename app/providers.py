@@ -408,11 +408,11 @@ class GeminiProvider:
 PRESETS: dict[str, dict] = {
     "gemini": {"label": "Gemini", "tag": "free", "needs_key": True,
                "key_url": "https://aistudio.google.com/apikey",
-               "key_hint": "Free key from Google AI Studio (small daily limit)"},
+               "key_hint": "Free key from Google AI Studio"},
     "groq": {"label": "Groq", "tag": "free", "badge": "★ best free", "needs_key": True,
              "base": "https://api.groq.com/openai/v1",
              "key_url": "https://console.groq.com/keys",
-             "key_hint": "Free key, very fast, generous daily limits",
+             "key_hint": "Free key from Groq Console",
              "prefer": ["openai/gpt-oss-120b", "llama-3.3-70b", "kimi-k2", "qwen3-32b",
                         "llama-4", "gpt-oss-20b"],
              "light": ["llama-3.1-8b-instant", "gpt-oss-20b", "llama-3.3-70b"],
@@ -420,14 +420,14 @@ PRESETS: dict[str, dict] = {
     "openrouter": {"label": "OpenRouter", "tag": "free", "needs_key": True,
                    "base": "https://openrouter.ai/api/v1",
                    "key_url": "https://openrouter.ai/keys",
-                   "key_hint": "Free key; Kuro only uses the free models",
+                   "key_hint": "Free key · only free models are used",
                    "prefer": ["deepseek", "qwen3", "gpt-oss", "llama-3.3-70b", "gemini",
                               "mistral", "glm"],
                    "free_only": True},
     "ollama": {"label": "Ollama", "tag": "offline", "needs_key": False,
                "base": "http://localhost:11434/v1",
                "key_url": "https://ollama.com/download",
-               "key_hint": "Runs on this PC, no internet. Run setup_offline_brain.bat once",
+               "key_hint": "Run setup_offline_brain.bat once",
                "prefer": ["qwen3", "qwen2.5", "llama3.1", "llama3.2", "mistral", "gemma"]},
     "openai": {"label": "OpenAI", "tag": "paid", "needs_key": True,
                "base": "https://api.openai.com/v1",
@@ -449,13 +449,15 @@ ORDER = ["groq", "gemini", "openrouter", "ollama", "openai", "claude"]
 # for the brain picker: one plain line each, and an accent colour for the badge
 BLURB = {
     "groq": "Free · fastest replies · big daily limit",
-    "gemini": "Free · can see images and your screen · small daily limit",
+    "gemini": "Free · sees images · small daily limit",
     "openrouter": "Free models from many AI labs",
     "ollama": "Free · runs on this PC, works offline",
     "openai": "Paid · OpenAI's GPT models",
     "claude": "Paid · Anthropic's Claude models",
     "cloud": "Your Kuro subscription",
 }
+TAG = {"groq": "free", "gemini": "free", "openrouter": "free", "ollama": "offline",
+       "openai": "paid", "claude": "paid", "cloud": "subscription"}
 ACCENT = {"groq": "#f2734f", "gemini": "#6f9cf7", "openrouter": "#9b8cf5", "ollama": "#d8d9de",
           "openai": "#3fbf95", "claude": "#e0906d", "cloud": "#bae25c"}
 RECOMMENDED = "groq"          # free, fast, and far more generous limits than Gemini's free tier

@@ -23,7 +23,8 @@ import math
 import textwrap
 import threading
 
-from PySide6.QtCore import (QEasingCurve, QElapsedTimer, QPoint, QPointF, QPropertyAnimation, QRectF,
+from PySide6.QtCore import (QEasingCurve, QElapsedTimer, QEvent, QPoint, QPointF,
+                            QPropertyAnimation, QRectF, QVariantAnimation,
                             Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect,
@@ -97,6 +98,88 @@ class IconButton(QAbstractButton):
         theme.icon(p, self.kind, c, r.width() * 0.46, col)
 
 
+class HoverFX(QWidget):
+    """A soft highlight laid over any widget: fades in on hover, flashes on
+    press, fades out on leave. Mouse events pass straight through."""
+
+    def __init__(self, target: QWidget, radius: float = 9.0, strength: float = 1.0):
+        super().__init__(target)
+        self.target, self.radius, self.strength = target, radius, strength
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self._hover = Spring(0.0, 260, 0.9)
+        self._press = Spring(0.0, 380, 0.9)
+        self._timer = QTimer(self, interval=16, timeout=self._step)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._clock = QElapsedTimer()
+        target.installEventFilter(self)
+        self.resize(target.size())
+        self.raise_()
+
+    def eventFilter(self, obj, e) -> bool:
+        t = e.type()
+        if t == QEvent.Enter and obj.isEnabled():
+            self._hover.target = 1.0
+            self._go()
+        elif t == QEvent.Leave:
+            self._hover.target = 0.0
+            self._go()
+        elif t == QEvent.MouseButtonPress and obj.isEnabled():
+            self._press.value, self._press.target = 1.0, 0.0
+            self._go()
+        elif t == QEvent.Resize:
+            self.resize(obj.size())
+        elif t == QEvent.EnabledChange and not obj.isEnabled():
+            self._hover.target = 0.0
+            self._go()
+        return False
+
+    def _go(self) -> None:
+        self.raise_()
+        if not self._timer.isActive():
+            self._clock.restart()
+            self._timer.start()
+
+    def _step(self) -> None:
+        dt = min(self._clock.restart() / 1000.0, 1 / 20) or 0.016
+        self._hover.step(dt)
+        self._press.step(dt)
+        done = all(abs(sp.value - sp.target) < 0.003 and abs(sp.vel) < 0.02
+                   for sp in (self._hover, self._press))
+        if done:
+            self._hover.value, self._press.value = self._hover.target, self._press.target
+            self._timer.stop()
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        h = max(0.0, min(1.0, self._hover.value))
+        k = max(0.0, min(1.0, self._press.value))
+        if h < 0.01 and k < 0.01:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(186, 226, 92, int((70 * h + 90 * k) * self.strength)), 1.0))
+        p.setBrush(QColor(255, 255, 255, int((10 * h + 26 * k) * self.strength)))
+        p.drawRoundedRect(r, self.radius, self.radius)
+
+
+def hover_fx(root: QWidget) -> None:
+    """Give every button and clickable row under `root` the hover highlight."""
+    for w in [root] + root.findChildren(QWidget):
+        if getattr(w, "_has_fx", False) or isinstance(w, HoverFX):
+            continue
+        name = w.objectName()
+        if isinstance(w, QPushButton) and name in ("seg", "primary", "ghost"):
+            radius = 7.0 if name == "seg" else 10.0
+        elif name == "brainrow":
+            radius = 11.0
+        else:
+            continue
+        w._has_fx = True
+        HoverFX(w, radius, 0.8 if name == "seg" else 1.0)
+
+
 class Toggle(QAbstractButton):
     """A small pill switch with a sliding knob."""
 
@@ -107,13 +190,26 @@ class Toggle(QAbstractButton):
         self.setFixedSize(34, 18)
         self.setCursor(Qt.PointingHandCursor)
         self._pos = Spring(1.0 if checked else 0.0, 300, 0.7)
+        self._hov = Spring(0.0, 260, 0.9)
         self._timer = QTimer(self, interval=16, timeout=self._step)
         self.toggled.connect(lambda on: (setattr(self._pos, "target", 1.0 if on else 0.0),
                                          self._timer.start()))
 
+    def enterEvent(self, e) -> None:
+        self._hov.target = 1.0
+        self._timer.start()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hov.target = 0.0
+        self._timer.start()
+        super().leaveEvent(e)
+
     def _step(self) -> None:
         self._pos.step(0.016)
-        if abs(self._pos.value - self._pos.target) < 0.002 and abs(self._pos.vel) < 0.01:
+        self._hov.step(0.016)
+        if all(abs(sp.value - sp.target) < 0.002 and abs(sp.vel) < 0.01
+               for sp in (self._pos, self._hov)):
             self._timer.stop()
         self.update()
 
@@ -130,6 +226,12 @@ class Toggle(QAbstractButton):
         p.setPen(Qt.NoPen)
         p.setBrush(col)
         p.drawRoundedRect(QRectF(0, 0, 34, 18), 9, 9)
+        hov = max(0.0, min(1.0, self._hov.value))
+        if hov > 0.01:                               # hover: a soft ring around the track
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(186, 226, 92, int(110 * hov)), 1.2))
+            p.drawRoundedRect(QRectF(0.6, 0.6, 32.8, 16.8), 8.4, 8.4)
+            p.setPen(Qt.NoPen)
         x = 9 + 16 * self._pos.value
         p.setBrush(QColor(10, 10, 11) if v > 0.5 else QColor("#9a9da5"))
         p.drawEllipse(QPointF(x, 9), 6.2, 6.2)
@@ -533,26 +635,39 @@ class ChatPage(QWidget):
 
 
 class Segmented(QWidget):
-    """A row of pill buttons, one selected (like iOS segmented control)."""
+    """A row of pill buttons, one selected (like iOS segmented control).
+    The selection highlight slides from the old choice to the new one."""
     changed = Signal(str)
 
     def __init__(self, options: list[tuple[str, str]], value: str, small: bool = False):
         super().__init__()
         self.buttons: dict[str, QPushButton] = {}
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(2)
+        pad = "padding: 3px 8px;" if small else ""
         for key, label in options:
             b = QPushButton(label)
             b.setObjectName("seg")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
-            if small:
-                b.setStyleSheet("padding: 4px 6px;")
+            # the selected look is painted by the sliding pill, not the button
+            b.setStyleSheet(f"QPushButton#seg {{ {pad} background: transparent;"
+                            f" border: 1px solid transparent; }}"
+                            f"QPushButton#seg:checked {{ background: transparent;"
+                            f" border-color: transparent; color: {LIME_HEX}; }}")
             b.clicked.connect(lambda _c=False, k=key: self.set_value(k, emit=True))
             self.buttons[key] = b
             lay.addWidget(b)
+        self._x, self._w = Spring(0, 320, 0.82), Spring(0, 320, 0.82)
+        self._placed = False
+        self._timer = QTimer(self, interval=16, timeout=self._step)
+        self._timer.setTimerType(Qt.PreciseTimer)
         self.set_value(value)
+
+    def _target(self) -> QRectF:
+        b = self.buttons[self.value]
+        return QRectF(b.geometry())
 
     def set_value(self, key: str, emit: bool = False) -> None:
         if key not in self.buttons:
@@ -560,8 +675,55 @@ class Segmented(QWidget):
         self.value = key
         for k, b in self.buttons.items():
             b.setChecked(k == key)
+        r = self._target()
+        self._x.target, self._w.target = r.x(), r.width()
+        if self._placed and self.isVisible():
+            self._timer.start()
+        else:
+            self._snap()
         if emit:
             self.changed.emit(key)
+
+    def _snap(self) -> None:
+        r = self._target()
+        self._x.value = self._x.target = r.x()
+        self._w.value = self._w.target = r.width()
+        self.update()
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        QTimer.singleShot(0, self._snap)
+        self._placed = True
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        QTimer.singleShot(0, self._snap)
+        self._placed = True
+
+    def _step(self) -> None:
+        for sp in (self._x, self._w):
+            sp.step(0.016)
+        if all(abs(sp.value - sp.target) < 0.6 and abs(sp.vel) < 8 for sp in (self._x, self._w)):
+            self._x.value, self._w.value = self._x.target, self._w.target
+            self._timer.stop()
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        if not self.buttons:
+            return
+        r = self._target()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        track = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor("#202228"), 1.0))
+        p.setBrush(QColor("#111216"))
+        rad = min(10.0, track.height() / 2)
+        p.drawRoundedRect(track, rad, rad)
+        pill = QRectF(self._x.value + 0.5, r.y() + 0.5, max(8.0, self._w.value) - 1,
+                      r.height() - 1)
+        p.setPen(QPen(QColor(LIME_HEX), 1.0))
+        p.setBrush(QColor(186, 226, 92, 30))
+        p.drawRoundedRect(pill, rad - 2, rad - 2)
 
 
 class Card(QFrame):
@@ -584,6 +746,7 @@ class Card(QFrame):
             line.setFixedHeight(1)
             line.setStyleSheet("background: #1b1c21; border: none;")
             self._lay.addWidget(line)
+            w._divider = line                  # hidden together with its row
         self._lay.addWidget(w)
         self._rows += 1
         return w
@@ -640,7 +803,8 @@ def _rgba(hex_: str, alpha: float) -> str:
 
 
 class BrainRow(QFrame):
-    """One brain in the picker: badge, name, one-line description, status."""
+    """One brain in the picker. Compact (badge, name, tag, status) until it's
+    the chosen one; then its one-line description shows too."""
     picked = Signal(str)
 
     def __init__(self, name: str):
@@ -649,18 +813,17 @@ class BrainRow(QFrame):
         pre = P.PRESETS[name]
         self.setObjectName("brainrow")
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(48)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 7, 10, 7)
-        lay.setSpacing(10)
+        lay.setContentsMargins(9, 6, 9, 6)
+        lay.setSpacing(9)
         accent = P.ACCENT.get(name, LIME_HEX)
         badge = QLabel(pre["label"][0])
-        badge.setFixedSize(28, 28)
+        badge.setFixedSize(24, 24)
         badge.setAlignment(Qt.AlignCenter)
         badge.setStyleSheet(f"background: {_rgba(accent, 0.13)}; color: {accent};"
                             f" border: 1px solid {_rgba(accent, 0.4)};"
-                            " border-radius: 14px; font-weight: 700; font-size: 10pt;")
-        lay.addWidget(badge)
+                            " border-radius: 12px; font-weight: 700; font-size: 9pt;")
+        lay.addWidget(badge, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(1)
         top = QHBoxLayout()
@@ -669,16 +832,17 @@ class BrainRow(QFrame):
         self.title.setStyleSheet(f"color: {TEXT_HEX}; font-size: 9.5pt; font-weight: 600;"
                                  " background: transparent;")
         top.addWidget(self.title)
-        if pre.get("badge"):
-            star = QLabel(pre["badge"])
-            star.setStyleSheet(f"color: {LIME_HEX}; font-size: 7.5pt; background: transparent;")
-            top.addWidget(star)
+        tag = pre.get("badge") or P.TAG.get(name, "")
+        self.tag = QLabel(tag)
+        self.tag.setStyleSheet(f"color: {LIME_HEX if pre.get('badge') else DIM_HEX};"
+                               " font-size: 7.5pt; background: transparent;")
+        top.addWidget(self.tag)
         top.addStretch()
         col.addLayout(top)
-        blurb = QLabel(P.BLURB.get(name, ""))
-        blurb.setWordWrap(True)
-        blurb.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; background: transparent;")
-        col.addWidget(blurb)
+        self.blurb = QLabel(P.BLURB.get(name, ""))
+        self.blurb.setWordWrap(True)
+        self.blurb.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; background: transparent;")
+        col.addWidget(self.blurb)
         lay.addLayout(col, 1)
         self.status = QLabel("")
         self.status.setAlignment(Qt.AlignCenter)
@@ -686,23 +850,21 @@ class BrainRow(QFrame):
         self.set_state(False, "")
 
     def set_state(self, selected: bool, status: str) -> None:
+        self.blurb.setVisible(selected)
         border = LIME_HEX if selected else "#1d1f24"
-        bg = "#171a14" if selected else "#121317"
+        bg = "#161911" if selected else "#121317"
         self.setStyleSheet(f"QFrame#brainrow {{ background: {bg}; border: 1px solid {border};"
-                           " border-radius: 11px; }"
-                           "QFrame#brainrow:hover { border-color: #3a3d45; }" if not selected else
-                           f"QFrame#brainrow {{ background: {bg}; border: 1px solid {border};"
                            " border-radius: 11px; }")
         styles = {"In use": ("#0e0f12", LIME_HEX, LIME_HEX),
                   "Backup": (LIME_HEX, "transparent", _rgba(LIME_HEX, 0.45)),
                   "Key saved": (TEXT_HEX, "transparent", "#3a3d45"),
-                  "Offline": (TEXT_HEX, "transparent", "#3a3d45"),
+                  "Local": (TEXT_HEX, "transparent", "#3a3d45"),
                   "Add key": (DIM_HEX, "transparent", "#2a2c32")}
         fg, bgc, bd = styles.get(status, (DIM_HEX, "transparent", "#2a2c32"))
         self.status.setText(status)
         self.status.setVisible(bool(status))
         self.status.setStyleSheet(f"color: {fg}; background: {bgc}; border: 1px solid {bd};"
-                                  " border-radius: 9px; padding: 2px 8px; font-size: 7.5pt;")
+                                  " border-radius: 7px; padding: 1px 7px; font-size: 7.5pt;")
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.LeftButton:
@@ -800,8 +962,7 @@ class SettingsPage(QWidget):
 
         self.tabbar = Segmented(self.TABS, "general", small=True)
         self.pages = QStackedWidget()
-        self.tabbar.changed.connect(lambda k: self.pages.setCurrentIndex(
-            [t for t, _ in self.TABS].index(k)))
+        self.tabbar.changed.connect(self._switch_tab)
         for key, _label in self.TABS:
             content = getattr(self, f"_tab_{key}")()
             sc = QScrollArea()
@@ -819,6 +980,37 @@ class SettingsPage(QWidget):
         lay.addWidget(self.pages, 1)
         self._tested.connect(self._show_result)
         self._note_timer = QTimer(self, singleShot=True, timeout=lambda: self.saved_note.setText(""))
+
+    def _switch_tab(self, key: str) -> None:
+        """New tab fades in while drifting up a few pixels into place."""
+        i = [t for t, _ in self.TABS].index(key)
+        if i == self.pages.currentIndex():
+            return
+        self.pages.setCurrentIndex(i)
+        page = self.pages.widget(i)
+        inner = page.widget() if isinstance(page, QScrollArea) else page
+        lay = inner.layout()
+        eff = QGraphicsOpacityEffect(page)
+        eff.setOpacity(0.0)
+        page.setGraphicsEffect(eff)
+        anim = QVariantAnimation(self)
+        anim.setDuration(230)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def frame(v, eff=eff, lay=lay):
+            eff.setOpacity(float(v))
+            if lay is not None:
+                lay.setContentsMargins(0, int(round(8 * (1 - float(v)))), 6, 0)
+
+        def done(page=page, lay=lay):
+            page.setGraphicsEffect(None)          # no effect left running once settled
+            if lay is not None:
+                lay.setContentsMargins(0, 0, 6, 0)
+        anim.valueChanged.connect(frame)
+        anim.finished.connect(done)
+        anim.start(QVariantAnimation.DeleteWhenStopped)
 
     # ------------------------------------------------------------ building blocks
     def _page(self) -> tuple[QWidget, QVBoxLayout]:
@@ -860,39 +1052,67 @@ class SettingsPage(QWidget):
     def _tab_general(self) -> QWidget:
         w, lay = self._page()
         you = Card()
-        you.add(_row("Name", self._edit("user_name", "your name", fallback="friend")))
+        you.add(_row("Your name", self._edit("user_name", "your name", fallback="friend")))
+
+        lang = Card()
+        self.lang_pick = Segmented([("English", "English"), ("Filipino", "Filipino"),
+                                    ("Taglish", "Taglish")], self.s.language, small=True)
+        self.lang_pick.changed.connect(lambda v: self._set("language", v))
+        lang.add(_row("Kuro speaks", self.lang_pick, "Replies and voice"))
+        lang.add(_row("Translate to", self._edit("translate_to", "English", 110,
+                                                 fallback="English"), "For quick actions"))
+
         kuro = Card()
-        self.size = Segmented([("small", "S"), ("medium", "M"), ("large", "L")],
-                              self.s.chat_size, small=True)
-        self.size.changed.connect(lambda v: self._set("chat_size", v))
-        kuro.add(_row("Chat size", self.size))
         self.scale = QSlider(Qt.Horizontal)
         self.scale.setRange(70, 150)
         self.scale.setSingleStep(5)
-        self.scale.setFixedWidth(130)
+        self.scale.setFixedWidth(120)
+        self.scale.setCursor(Qt.PointingHandCursor)
         self.scale.setValue(int(round(self.s.scale * 100)))
         self.scale.setStyleSheet(
             f"QSlider::groove:horizontal {{ height: 4px; background: #23252b; border-radius: 2px; }}"
             f"QSlider::sub-page:horizontal {{ background: {LIME_HEX}; border-radius: 2px; }}"
             f"QSlider::handle:horizontal {{ background: {LIME_HEX}; width: 14px; height: 14px;"
-            f" margin: -6px 0; border-radius: 7px; }}")
+            f" margin: -6px 0; border-radius: 7px; }}"
+            f"QSlider::handle:horizontal:hover {{ background: #d4f08e; width: 16px; height: 16px;"
+            f" margin: -7px 0; border-radius: 8px; }}")
         self.scale.sliderReleased.connect(lambda: self._set("scale", self.scale.value() / 100))
         self.scale.valueChanged.connect(
             lambda v: None if self.scale.isSliderDown() else self._set("scale", v / 100))
-        kuro.add(_row("Kuro's size", self.scale))
-        kuro.add(self._toggle("wander", "Teleport around"))
-        kuro.add(self._toggle("dnd_fullscreen", "Hide during fullscreen",
-                              "Games and videos"))
+        kuro.add(_row("Size", self.scale))
+        self.size = Segmented([("small", "S"), ("medium", "M"), ("large", "L")],
+                              self.s.chat_size, small=True)
+        self.size.changed.connect(lambda v: self._set("chat_size", v))
+        kuro.add(_row("Chat size", self.size))
+        kuro.add(self._toggle("wander", "Wander", "Teleports around now and then"))
+        kuro.add(self._toggle("dnd_fullscreen", "Hide in fullscreen", "Games and videos"))
         kuro.add(self._toggle("morning_briefing", "Daily briefing",
-                              "Weather (finds your city itself), calendar, reminders"))
+                              "Weather, calendar, reminders"))
+
         priv = Card()
-        priv.add(self._toggle("learn_enabled", "Learn from our chats"))
-        priv.add(self._toggle("aware", "Notice which app I'm in"))
-        priv.add(self._toggle("react_activity", "React to what I'm doing",
-                              "Glasses when you code, typing along, the odd comment"))
-        priv.add(self._toggle("suggestions", "Habit suggestions"))
-        priv.add(self._toggle("allow_shell", "PowerShell", "Always asks first"))
-        for title, card in (("YOU", you), ("KURO", kuro), ("PRIVACY", priv)):
+        priv.add(self._toggle("learn_enabled", "Learn from chats", "Remembers what you tell him"))
+        priv.add(self._toggle("aware", "See the active app", "Only its name and title"))
+        priv.add(self._toggle("react_activity", "React to your work",
+                              "Props, typing along, short comments"))
+        priv.add(self._toggle("suggestions", "Habit suggestions", "Offers apps you often open"))
+        priv.add(self._toggle("allow_shell", "Allow PowerShell", "Always asks first"))
+
+        keys = Card()
+        self.hotkey_btns: dict[str, HotkeyButton] = {}
+        for label, attr in (("Chat", "hotkey_chat"), ("Talk", "hotkey_voice"),
+                            ("Quick actions", "hotkey_quick")):
+            b = HotkeyButton(getattr(self.s, attr))
+            b.captured.connect(lambda c, a=attr: self._hotkey(a, c))
+            b.capturing.connect(self.hotkey_capture)
+            self.hotkey_btns[attr] = b
+            keys.add(_row(label, b))
+        self.hotkey_note = QLabel("Click one, then press new keys.")
+        self.hotkey_note.setWordWrap(True)
+        self.hotkey_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
+        keys.add(self.hotkey_note)
+
+        for title, card in (("YOU", you), ("LANGUAGE", lang), ("KURO", kuro),
+                            ("PRIVACY", priv), ("SHORTCUTS", keys)):
             lay.addWidget(_section(title))
             lay.addWidget(card)
         lay.addStretch()
@@ -941,53 +1161,47 @@ class SettingsPage(QWidget):
         self.result.setWordWrap(True)
         dl.addWidget(self.result)
         self.model_edit = self._edit("model", "auto", 150)
-        dl.addWidget(_row("Model", self.model_edit, "Auto picks the best one"))
+        dl.addWidget(_row("Model", self.model_edit, "Leave on auto"))
         self._detail_anim = QPropertyAnimation(self.detail, b"maximumHeight", self)
         self._detail_anim.setDuration(220)
         self._detail_anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        brain = Card()
-        brain.add(self._toggle("auto_fallback", "Backup brain",
-                               "Out of free uses? I switch to another brain you've added "
-                               "a key for. Tip: add Groq and Gemini both."))
-        brain.add(_row("Translate into", self._edit("translate_to", "English", 110,
-                                                   fallback="English")))
+        backup = Card()
+        backup.add(self._toggle("auto_fallback", "Backup brain",
+                                "Switches to another brain with a key if one runs out"))
+
         voice = Card()
         voice.add(self._toggle("speak_replies", "Speak replies"))
         self.voice_pick = Segmented([(k, v[0]) for k, v in VOICES.items()] + [("windows", "Windows")],
                                     self.s.voice, small=True)
         self.voice_pick.changed.connect(lambda v: self._set("voice", v))
-        voice.add(_row("Voice", self.voice_pick, "Natural, offline"))
-        voice.add(self._toggle("cute_voice", "Cute voice", "A touch higher and brighter"))
-        voice.add(self._toggle("wake_word", "“Hey Kuro”", "Hands-free voice commands"))
-        self.lang_pick = Segmented([("English", "English"), ("Filipino", "Filipino"),
-                                    ("Taglish", "Taglish")], self.s.language, small=True)
-        self.lang_pick.changed.connect(lambda v: self._set("language", v))
-        voice.add(_row("Language", self.lang_pick, "How he talks and listens"))
-        keys = Card()
-        self.hotkey_btns: dict[str, HotkeyButton] = {}
-        for label, attr in (("Chat", "hotkey_chat"), ("Talk", "hotkey_voice"),
-                            ("Quick actions", "hotkey_quick")):
-            b = HotkeyButton(getattr(self.s, attr))
-            b.captured.connect(lambda c, a=attr: self._hotkey(a, c))
-            b.capturing.connect(self.hotkey_capture)
-            self.hotkey_btns[attr] = b
-            keys.add(_row(label, b))
-        self.hotkey_note = QLabel("Click one, then press the new keys.")
-        self.hotkey_note.setWordWrap(True)
-        self.hotkey_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 2px 0 8px 0;")
-        keys.add(self.hotkey_note)
+        self.voice_row = _row("Voice", self.voice_pick)
+        voice.add(self.voice_row)
+        self.cute_row = self._toggle("cute_voice", "Cute voice", "Slightly higher pitch")
+        voice.add(self.cute_row)
+        self.toggles["speak_replies"].toggled.connect(self._voice_rows)
+
+        listen = Card()
+        listen.add(self._toggle("wake_word", "“Hey Kuro”", "Wake him by voice, hands-free"))
+
         lay.addWidget(_section("BRAIN"))
         lay.addWidget(picker)
-        for title, card in (("", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
-            if title:
-                lay.addWidget(_section(title))
-            else:
-                lay.addSpacing(6)
+        lay.addSpacing(6)
+        lay.addWidget(backup)
+        for title, card in (("VOICE", voice), ("LISTENING", listen)):
+            lay.addWidget(_section(title))
             lay.addWidget(card)
+        self._voice_rows(self.s.speak_replies)
         lay.addStretch()
         self._show_brain()
         return w
+
+    def _voice_rows(self, on: bool) -> None:
+        """Voice choices only matter if he speaks."""
+        for row in (self.voice_row, self.cute_row):
+            row.setVisible(bool(on))
+            if getattr(row, "_divider", None) is not None:
+                row._divider.setVisible(bool(on))
 
     def _hotkey(self, attr: str, value: str) -> None:
         current = {a: getattr(self.s, a) for a in self.hotkey_btns}
@@ -1011,7 +1225,7 @@ class SettingsPage(QWidget):
         if name in P.backups(self.s):
             return "Backup"
         if name == "ollama":
-            return "Offline"
+            return "Local"
         return "Key saved" if has_key else "Add key"
 
     def _show_brain(self, note: str = "", animate: bool = False) -> None:
@@ -1632,6 +1846,8 @@ class Hud(QWidget):
         self.settings.back.connect(lambda: self.open("chat"))
         self.settings.saved.connect(self._saved)
         self.hotkey_capture = self.settings.hotkey_capture
+        for page in (self.settings, self.welcome, self.chat, self.study, self.confirm):
+            hover_fx(page)                  # soft hover / press feedback everywhere
         self.study.back.connect(lambda: self.open("chat"))
         self.confirm.answered.connect(self._answer)
         self.welcome.finished.connect(self.close_panel)
