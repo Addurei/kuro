@@ -177,3 +177,29 @@ def test_music_thread_never_imports_com():
     from app import music
     src = inspect.getsource(music.MusicWatcher)
     assert "comtypes" not in src and "pycaw" not in src
+
+
+def test_tab_title_beats_hover_previews():
+    """On YouTube's watch page, hovering a sidebar video swaps the media info to
+    the preview (with sound). The window title still shows the real video."""
+    from app.music import title_in_windows
+    wins = ["Hate Me - YouTube - Google Chrome", "Kuro"]
+    assert title_in_windows("Hate Me", wins)
+    assert title_in_windows("Hate Me", ["(3) Hate Me - YouTube — Opera"])
+    assert not title_in_windows("Friends", wins)
+
+    w = MusicWatcher(start=False)
+    seen = []
+    w.changed.connect(seen.append)
+    w.offer(Track("Hate Me", "Ellie Goulding", "Browser", True, in_window=True), now=0)
+    assert [t.title for t in seen] == ["Hate Me"]                  # instant
+    preview = Track("Friends", "Chase Atlantic - Topic", "Browser", True,
+                    audible=True, in_window=False)
+    for t in range(1, 14):                                         # a long, loud hover
+        w.offer(preview, now=t)
+    w.offer(Track("Hate Me", "Ellie Goulding", "Browser", True, in_window=True), now=14)
+    assert [t.title for t in seen] == ["Hate Me"]
+    bg = Track("Next Song", "Someone", "Browser", True, audible=True, in_window=False)
+    for t in range(20, 36):                                        # music in a background tab
+        w.offer(bg, now=t)
+    assert seen[-1].title == "Next Song"

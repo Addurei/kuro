@@ -35,6 +35,7 @@ class Track:
     kind: int | None = None        # Windows' guess: 1 music, 2 video (often missing)
     duration: float = 0.0          # seconds, 0 = unknown
     audible: bool | None = None    # is that app actually making sound? None = can't tell
+    in_window: bool | None = None  # browsers: is it the tab you're on (window title)?
 
     @property
     def key(self) -> tuple[str, str]:
@@ -162,6 +163,43 @@ class AudioMeter:
         return any(now - t <= within for t in hits)
 
 
+def _norm_title(s: str) -> str:
+    s = re.sub(r"^\(\d+\)\s*", "", s or "")          # "(3) Hate Me - YouTube"
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def window_titles() -> list[str]:
+    """Titles of visible top-level windows. Plain user32 calls: no COM,
+    so it's safe on the WinRT thread."""
+    import ctypes
+    import platform
+    if platform.system() != "Windows":
+        return []
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    out: list[str] = []
+    proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def cb(hwnd, _lp):
+        if user32.IsWindowVisible(hwnd):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                out.append(buf.value)
+        return True
+    user32.EnumWindows(proto(cb), 0)
+    return out
+
+
+def title_in_windows(title: str, titles: list[str]) -> bool:
+    """A browser window is titled after its current tab ("Hate Me - YouTube").
+    YouTube's hover previews never change it, so a match means it's the
+    video you're actually on."""
+    t = _norm_title(title)
+    return bool(t) and any(_norm_title(w).startswith(t) or f" {t} " in f" {_norm_title(w)} "
+                           for w in titles)
+
+
 def source_name(app_id: str) -> str:
     low = (app_id or "").lower()
     if "spotify" in low:
@@ -227,6 +265,9 @@ class MusicWatcher(QObject):
     # YouTube plays a muted preview for a few seconds: that never counts.
     CONFIRM = 3.0
     CONFIRM_SILENT = 12.0          # never heard it (muted, or the meter can't tell): wait longer
+    # a browser video that isn't the tab on screen (background tab, or a hover
+    # preview inside the page): only believed after this long
+    CONFIRM_BACKGROUND = 15.0
 
     def offer(self, track: Track | None, now: float | None = None) -> None:
         """A raw reading from Windows. Passes it on only once it's clearly
@@ -247,6 +288,10 @@ class MusicWatcher(QObject):
             elif not cur.playing and getattr(self, "_pending", None) is None:
                 self.feed(track)                        # both paused: follow Windows
             return
+        if track.in_window:                             # the tab you're on: no doubt
+            self._pending = None
+            self.feed(track)
+            return
         p = getattr(self, "_pending", None)
         if p is None or p["key"] != track.key:
             self._pending = {"key": track.key, "since": now, "heard": track.audible}
@@ -254,7 +299,12 @@ class MusicWatcher(QObject):
         if track.audible:
             p["heard"] = True
         waited = now - p["since"]
-        if (waited >= self.CONFIRM and p["heard"] is not False) or waited >= self.CONFIRM_SILENT:
+        if track.in_window is False:                    # browser, but not the tab on screen
+            ok = waited >= self.CONFIRM_BACKGROUND
+        else:
+            ok = ((waited >= self.CONFIRM and p["heard"] is not False)
+                  or waited >= self.CONFIRM_SILENT)
+        if ok:
             self._pending = None
             self.feed(track)
 
@@ -349,6 +399,11 @@ class MusicWatcher(QObject):
             pass
         if track.playing:
             track.audible = self.meter.audible(app_id)
+        if track.source == "Browser":
+            try:
+                track.in_window = title_in_windows(title, window_titles())
+            except Exception:
+                track.in_window = None
         if props.thumbnail and not (cur and cur.key == track.key and cur.art):
             track.art = await self._thumbnail(props.thumbnail)
         return track
