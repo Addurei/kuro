@@ -26,7 +26,7 @@ import threading
 from PySide6.QtCore import (QEasingCurve, QElapsedTimer, QPoint, QPointF, QPropertyAnimation, QRectF,
                             Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect, QGridLayout,
+from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
                                QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
