@@ -95,6 +95,7 @@ class Settings:
     learn_enabled: bool = True        # reflect on chats and remember facts about you
     suggestions: bool = True          # "you usually open Blender around now..."
     aware: bool = True                # notice which app you're in
+    react_activity: bool = True       # props, typing along, the odd comment (app/activity.py)
 
     # safety
     allow_shell: bool = True          # PowerShell tool exists, always asks first

@@ -101,6 +101,8 @@ class CatWidget(QWidget):
             "paw": S(0, 34, 0.92), "lick": S(0, 50, 1.0),
             "gx": S(0, 48, 0.88), "gy": S(0, 48, 0.88),
             "blep": S(0, 30, 1.0),             # sleepy tongue tip
+            "glasses": S(0, 70, 0.6), "pencil": S(0, 70, 0.6), "beret": S(0, 70, 0.6),
+            "knead": S(0, 40, 1.0),            # typing along with you
         }
         self._idle_in = random.uniform(12, 25)
         # expressions, cursor attention, music
@@ -151,6 +153,10 @@ class CatWidget(QWidget):
         self._pop_t = -99.0
         self._blep_in = random.uniform(8, 14)
         self._blep_until = 0.0
+        # what you're doing (app/activity.py): a prop, and paws that type along
+        self.prop = ""
+        self.typing_rate: Callable[[], float] = lambda: 0.0
+        self._knead_phase = 0.0
 
         # movement
         self.mode = "rest"                 # rest | walk | drag | fly | blink
@@ -225,6 +231,14 @@ class CatWidget(QWidget):
         if playing != self.music:
             self.music = playing
             self.sp["squash"].kick(0.9 if playing else -0.6)
+
+    def set_prop(self, prop: str) -> None:
+        """glasses | pencil | beret | '' (what you're doing decides)."""
+        if prop != self.prop:
+            self.prop = prop
+            if prop:
+                self.sp["squash"].kick(0.5)
+                self.sp["ear"].kick(4)
 
     def set_scanning(self, on: bool) -> None:
         """JARVIS mode: glowing eyes sweep the screen, radar rings at his feet."""
@@ -353,15 +367,12 @@ class CatWidget(QWidget):
         self._slow_blinks(dt)
         self._twitches(dt)
         self._asleep(dt)
+        self._type_along(dt)
         if self.expr and self.t > self._expr_until:
             self.expr = ""
         # save power: 30 fps when nothing much is moving
         self._scan_fade = max(0.0, min(1.0, self._scan_fade + (dt * 3 if self.scanning else -dt * 2)))
-        calm = (self.state == "sleeping" and self.mode == "rest" and self._scan_fade <= 0
-                and not self._sparks and not self._notes)
-        if calm == self._fast:
-            self._fast = not calm
-            self._frame.setInterval(16 if self._fast else 33)
+        self._pace()
         self._particles(dt)
         if self.away and self.sp["alpha"].value < 0.03 and self.isVisible():
             self.hide()                      # fully faded: get out of the way
@@ -369,6 +380,26 @@ class CatWidget(QWidget):
                  "listening": 3.0}.get(self.state, 2.2) + 3 * self.sp["gait"].value
         self.tail_phase += dt * speed
         self.update()
+
+    def _pace(self) -> None:
+        """Frame rate by need: 60 fps only while something is actually moving
+        fast, 30 while he idles (springs and sway look the same), 20 asleep,
+        4 while hidden. Physics uses real elapsed time, so nothing changes speed."""
+        lively = (self.mode != "rest" or self.hop_y > 0.5 or self._sparks or self._notes
+                  or self._scan_fade > 0 or self._action or self.expr
+                  or self.state in ("talking", "happy", "listening", "thinking")
+                  or self._cursor_speed > 400 or self._blink >= 0
+                  or abs(self.sp["squash"].vel) > 0.5 or self.sp["knead"].value > 0.05)
+        if self.away:
+            ms = 250
+        elif lively:
+            ms = 16
+        elif self.state == "sleeping" and self.t - self._doze_t0 > 4:
+            ms = 50
+        else:
+            ms = 33
+        if ms != self._frame.interval():
+            self._frame.setInterval(ms)
 
     def _follow_through(self) -> None:
         dvx, dvy = self.vx - self._pvx, self.vy - self._pvy
@@ -649,6 +680,22 @@ class CatWidget(QWidget):
             self._blep_in = random.uniform(14, 26)
         if self.t < self._blep_until:
             sp["blep"].target = 1.0
+
+    def _type_along(self, dt: float) -> None:
+        """When you type, his front paws tap along at your pace (sitting, awake,
+        not busy with anything else). Props follow what you're doing."""
+        sp = self.sp
+        for name in ("glasses", "pencil", "beret"):
+            sp[name].target = 1.0 if self.prop == name and not self.music else 0.0
+        rate = 0.0
+        if self.state in ("idle", "thinking") and self.mode == "rest" and not self._action:
+            try:
+                rate = self.typing_rate()
+            except Exception:
+                rate = 0.0
+        sp["knead"].target = min(1.0, rate / 3) if rate >= 1.0 else 0.0
+        # taps follow your speed: ~1 paw press per 2 keys, capped so it stays cute
+        self._knead_phase += dt * math.pi * min(9.0, max(2.5, rate * 0.9))
 
     def _blinks(self, dt: float) -> None:
         if self._blink >= 0:
@@ -1066,6 +1113,10 @@ class CatWidget(QWidget):
             paw_raise=max(0.0, min(1.0, sp["paw"].value)),
             lick=max(0.0, min(1.0, sp["lick"].value)),
             blep=max(0.0, min(1.0, sp["blep"].value)),
+            knead=max(0.0, min(1.0, sp["knead"].value)), knead_phase=self._knead_phase,
+            glasses=max(0.0, min(1.0, sp["glasses"].value)),
+            pencil=max(0.0, min(1.0, sp["pencil"].value)),
+            beret=max(0.0, min(1.0, sp["beret"].value)),
             bubble=bubble, pop=pop,
             groom_x=sp["gx"].value, groom_y=sp["gy"].value,
             yawn=max(0.0, min(1.0, sp["yawn"].value)),

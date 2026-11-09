@@ -701,6 +701,8 @@ class SettingsPage(QWidget):
         priv = Card()
         priv.add(self._toggle("learn_enabled", "Learn from our chats"))
         priv.add(self._toggle("aware", "Notice which app I'm in"))
+        priv.add(self._toggle("react_activity", "React to what I'm doing",
+                              "Glasses when you code, typing along, the odd comment"))
         priv.add(self._toggle("suggestions", "Habit suggestions"))
         priv.add(self._toggle("allow_shell", "PowerShell", "Always asks first"))
         for title, card in (("YOU", you), ("KURO", kuro), ("PRIVACY", priv)):

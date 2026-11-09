@@ -120,6 +120,10 @@ class Pose:
     bubble: float = 0.0        # 0..1 sleeping nose bubble
     pop: float = 0.0           # 1..0 right after the bubble pops
     knead: float = 0.0         # 0..1 "making biscuits" with the front paws
+    knead_phase: float = -1.0  # >= 0: paw taps follow this (typing along with you)
+    glasses: float = 0.0       # 0..1 coding / studying
+    pencil: float = 0.0        # 0..1 writing (tucked behind his ear)
+    beret: float = 0.0         # 0..1 designing / 3D
     bat: float = 0.0           # 0..1 near front paw reaches out (batting at your cursor)
     groom_x: float = 0.0       # where the grooming paw goes (licking / washing his face)
     groom_y: float = 0.0
@@ -363,7 +367,8 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
             foot_f, foot_y = tilt(foot_f, foot_y)    # paws walk the same slope
             near_side = -1 if math.sin(yaw) > 0.05 else 1 if math.sin(yaw) < -0.05 else -1
             if front and pose.knead > 0:             # alternate little paw presses
-                press = max(0.0, math.sin(pose.t * 6.5 + (0 if side < 0 else math.pi)))
+                ph = pose.knead_phase if pose.knead_phase >= 0 else pose.t * 6.5
+                press = max(0.0, math.sin(ph + (0 if side < 0 else math.pi)))
                 foot_y -= 3.2 * press * pose.knead
                 foot_f += 1.2 * press * pose.knead
             if front and side == near_side and pose.bat > 0:
@@ -559,6 +564,9 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
     p.setTransform(head_tf, True)
     _whiskers(p, pose, psi, head_local)
     _nose_bubble(p, pose, psi)
+    _glasses(p, pose, psi)
+    _pencil(p, pose, psi)
+    _beret(p, pose, psi)
     _headphones(p, pose, psi, head_rx)
     p.restore()
 
@@ -735,6 +743,114 @@ def _nose_bubble(p: QPainter, pose: Pose, psi: float) -> None:
             a = math.radians(ang)
             p.drawEllipse(QPointF(c0.x() + d * math.cos(a) * (4 + 9 * k),
                                   c0.y() - math.sin(a) * (4 + 9 * k)), 1.2, 1.2)
+
+
+def _eye_centre(side: int, psi: float) -> tuple[float, float, float]:
+    """Where _eyes draws each eye (same turn-in for the chibi profile)."""
+    ex, ey, facing = on_head(side * EYE_PHI, EYE_LAM, psi)
+    turn = abs(math.sin(psi))
+    return ex * (1 - 0.42 * turn * turn), ey, facing
+
+
+def _glasses(p: QPainter, pose: Pose, psi: float) -> None:
+    """Big round study glasses: they drop onto his nose when you code or read."""
+    g = pose.glasses
+    if g < 0.02:
+        return
+    p.save()
+    p.setOpacity(p.opacity() * min(1.0, g * 1.5))
+    p.translate(0, -18 * (1 - g))                 # slide down into place
+    rims = []
+    for side in (-1, 1):
+        ex, ey, facing = _eye_centre(side, psi)
+        cf = max(0.0, min(1.12, facing / EYE_FRONT))
+        if cf < 0.12:
+            continue
+        cf = cf + (1 - cf) * 0.6 * abs(math.sin(psi)) if cf < 1 else cf
+        rims.append((side, ex, ey + 1, 21.5 * cf, 21.5))
+    if len(rims) == 2:                            # bridge over the nose
+        (_, x1, y1, r1, _), (_, x2, y2, r2, _) = rims
+        bridge = QPainterPath(QPointF(x1 + r1 * 0.92, y1 - 3))
+        bridge.quadTo(QPointF((x1 + x2) / 2, y1 - 9), QPointF(x2 - r2 * 0.92, y2 - 3))
+        p.setPen(QPen(QColor(40, 42, 50), 3.4, Qt.SolidLine, Qt.RoundCap))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(bridge)
+        p.setPen(QPen(QColor(186, 226, 92, 200), 1.3, Qt.SolidLine, Qt.RoundCap))
+        p.drawPath(bridge)
+    for side, x, y, rx, ry in rims:
+        p.setBrush(QColor(190, 225, 255, 26))      # faint lens tint
+        p.setPen(QPen(QColor(40, 42, 50), 3.6))
+        p.drawEllipse(QPointF(x, y), rx, ry)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(186, 226, 92, 210), 1.4))
+        p.drawEllipse(QPointF(x, y), rx, ry)
+        glare = QPainterPath(QPointF(x - rx * 0.55, y - ry * 0.15))   # lens shine
+        glare.quadTo(QPointF(x - rx * 0.5, y - ry * 0.6), QPointF(x - rx * 0.1, y - ry * 0.68))
+        p.setPen(QPen(QColor(255, 255, 255, 120), 2.0, Qt.SolidLine, Qt.RoundCap))
+        p.drawPath(glare)
+    p.restore()
+
+
+def _pencil(p: QPainter, pose: Pose, psi: float) -> None:
+    """A little yellow pencil tucked behind his ear while you write."""
+    k = pose.pencil
+    if k < 0.02:
+        return
+    side = -1.0 if math.sin(psi) > 0.15 else 1.0    # the ear on the far side of his turn
+    x, y, f = on_head(side * 52, 40, psi)
+    if f < -0.25:
+        return
+    p.save()
+    p.setOpacity(p.opacity() * min(1.0, k * 1.5))
+    p.translate(x + side * 4, y - 6 - 14 * (1 - k))
+    p.rotate(side * 58)
+    L, W = 34.0, 6.0
+    body = QPainterPath()
+    body.addRoundedRect(QRectF(-L / 2, -W / 2, L * 0.72, W), 1.5, 1.5)
+    p.setPen(QPen(QColor(30, 30, 34), 1.0))
+    p.setBrush(QColor(246, 200, 72))
+    p.drawPath(body)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(255, 226, 120))               # highlight stripe
+    p.drawRect(QRectF(-L / 2 + 1, -W / 2 + 1, L * 0.72 - 2, 1.4))
+    p.setBrush(QColor(236, 140, 160))               # eraser
+    p.drawRoundedRect(QRectF(-L / 2 - 5, -W / 2, 6, W), 2, 2)
+    p.setBrush(QColor(186, 190, 200))               # ferrule
+    p.drawRect(QRectF(-L / 2, -W / 2, 2.5, W))
+    tip = QPainterPath(QPointF(-L / 2 + L * 0.72, -W / 2))
+    tip.lineTo(QPointF(L / 2 + 3, 0))
+    tip.lineTo(QPointF(-L / 2 + L * 0.72, W / 2))
+    tip.closeSubpath()
+    p.setBrush(QColor(235, 200, 150))               # wood
+    p.drawPath(tip)
+    p.setBrush(QColor(50, 50, 56))                  # graphite
+    p.drawEllipse(QPointF(L / 2 + 1.5, 0), 1.6, 1.2)
+    p.restore()
+
+
+def _beret(p: QPainter, pose: Pose, psi: float) -> None:
+    """An artist's beret, tilted between his ears, for Blender / design work."""
+    k = pose.beret
+    if k < 0.02:
+        return
+    d = 1.0 if psi >= 0 else -1.0
+    p.save()
+    p.setOpacity(p.opacity() * min(1.0, k * 1.5))
+    cx = 8 * math.sin(psi) - 6 * d
+    cy = -HEAD_H + 6 - 20 * (1 - k)
+    p.translate(cx, cy)
+    p.rotate(-12 * d)
+    p.setPen(QPen(QColor(20, 20, 24), 1.4))
+    p.setBrush(QColor(176, 44, 64))
+    p.drawEllipse(QPointF(0, 0), 31, 12)            # the soft top
+    p.setBrush(QColor(140, 30, 48))
+    p.drawRoundedRect(QRectF(-24, 4, 48, 7), 3.5, 3.5)   # the band
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(255, 255, 255, 46))
+    p.drawEllipse(QPointF(-9, -4), 13, 4.5)         # sheen
+    p.setPen(QPen(QColor(140, 30, 48), 3.0, Qt.SolidLine, Qt.RoundCap))
+    p.drawLine(QPointF(3, -11), QPointF(6, -17))    # the little stem
+    p.restore()
 
 
 def _heart(cx: float, cy: float, r: float) -> QPainterPath:

@@ -17,11 +17,9 @@ winrt-Windows.Foundation.Collections ; sys_platform == "win32"
 winrt-Windows.Media.Control ; sys_platform == "win32"
 winrt-Windows.Storage.Streams ; sys_platform == "win32"
 
-# Reading documents
+# Reading documents (Word files are read with the standard library)
 pypdf
-python-docx
 
 # Voice
-pyttsx3
 SpeechRecognition
 PyAudio

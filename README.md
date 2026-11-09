@@ -43,6 +43,7 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 - **Focus companion**: right-click → FOCUS (or "focus for 50 minutes"). Pomodoro cycles; he naps on the taskbar with a timer ring, wakes you for breaks, cheers at the end, and keeps daily stats.
 - **Daily briefing**: once a day, the first time he sees you: weather (he finds your city from your connection, nothing to type), today's calendar, reminders, unread mail, yesterday's focus. Or ask "brief me".
 - **Google Calendar + Gmail** (optional): see and add events (adding asks first), read your inbox. Gmail is read-only: he can never send, delete or change mail.
+- **Knows what you're doing** (from the app and window title only, never what's inside): glasses when you code or study, a pencil behind his ear when you write, a beret in Blender / design apps. His paws tap along when you type (he counts key presses, never which keys). Now and then a short line about it ("Working on Kuro again?"), at most one every 15 minutes, never during focus or fullscreen. Turn it off: Settings → General → React to what I'm doing.
 - **Reminders** that survive restarts.
 - **Learns about you** (Right-click → Memory to review or forget).
 - **Teleports** around your screens now and then (5 styles), and **hides during fullscreen** games and videos, holding any messages until you're back.
@@ -82,6 +83,8 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/ui/theme.py` | Matte look, running border light, icons |
 | `app/providers.py` | All six brains: format translation, automatic model choice, fallbacks, error reasons |
 | `app/launcher.py` | Finding, opening and confirming apps |
+| `app/activity.py` | What you're doing (coding, writing, 3D…), typing pace, his comments |
+| `scripts/slim.py` | Removes unused libraries after installs (tests Qt before deleting) |
 | `app/location.py` | Automatic city + weather (Open-Meteo, free, no key) |
 | `app/brain.py` | Tool-use loop, persona, history |
 | `app/tools.py` | Every PC action. **Add new abilities here** |
@@ -90,7 +93,7 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
 ## Tests
 
-`python -m pytest` runs the test suite (115 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
+`python -m pytest` runs the test suite (149 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
 
 ## Known limits
 
@@ -102,3 +105,8 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 ## Before selling Kuro
 
 Never ship your own API key inside the app; anyone can extract it. Either users paste their own free key (how it works now), or you run a small server that holds the key and checks subscriptions. Also: write a short privacy policy, since he reads files and remembers personal facts. A code-signing certificate avoids Windows SmartScreen warnings. Check Google's Gemini API terms for commercial use.
+
+## Size and speed
+
+- `run.bat` slims Kuro's libraries after every install: unused Qt parts (Designer, QML, PDF, translations, dev tools; about 160 MB) are moved aside, Qt is test-started, and only then deleted (restored if anything fails). Old packages he no longer needs (pyttsx3 + pywin32, python-docx + lxml) are uninstalled.
+- He draws at 60 fps only while something moves fast, 30 while idle, 20 asleep, and nearly stops while hidden.

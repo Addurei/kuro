@@ -36,6 +36,8 @@ echo Installing Kuro's libraries, one moment...
 "%PY%" -m pip install --no-cache-dir --disable-pip-version-check -r requirements.txt >> "%LOG%" 2>&1
 if errorlevel 1 goto :eof
 copy /y requirements.txt "%VENV%\requirements.installed" >> "%LOG%" 2>&1
+echo Slimming Kuro's libraries (removes parts he never uses)...
+"%PY%" scripts\slim.py >> "%LOG%" 2>&1
 goto :eof
 
 :repair

@@ -16,7 +16,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .brain import Brain, context_prompt, strip_actions
-from . import scan
+from . import activity, scan
 from .config import Settings, app_root, data_dir
 from .features import FeaturesMixin
 from .memory import HabitLog, MemoryStore, Reflector
@@ -99,6 +99,8 @@ class Controller(FeaturesMixin):
         self.scan_path = d / "scan.json"
         self.scan = scan.load(self.scan_path) or {}
         self.active = ("", "")
+        self.typing = activity.Typing()
+        self.tracker = activity.Tracker()
         for old in ("usage.json",):                  # no longer used: free the space
             try:
                 (d / old).unlink()
@@ -123,6 +125,8 @@ class Controller(FeaturesMixin):
         icon = QIcon(str(app_root() / "assets" / "icon.png"))
         app.setWindowIcon(icon)
         self.cat = CatWidget(settings.scale, can_wander=self._can_wander)
+        self.cat.typing_rate = lambda: (self.typing.rate() if self.s.aware
+                                        and self.s.react_activity else 0.0)
         self.hud = Hud(self.cat, settings, self.memory, test_key)
         self.player = NowPlaying(self.cat, on_toggle=lambda: self._media("play_pause"),
                                  on_next=lambda: self._media("next"))
@@ -250,6 +254,12 @@ class Controller(FeaturesMixin):
             app, title = self.active
             if app:
                 extra.append(f"Right now {u} is using {app}" + (f": \"{title[:90]}\"." if title else "."))
+            cur = self.tracker.current
+            if cur.kind not in ("other", "browsing"):
+                what = cur.project or cur.subject
+                extra.append(f"{u} has been {cur.kind} for about {self.tracker.minutes} min"
+                             + (f" ({what})." if what else ".")
+                             + " Tailor help to that when it fits.")
         return context_prompt(self.s, self.memory.prompt_block(query=self._last_query),
                               self.habits.summary(),
                               "\n\n".join(extra))
@@ -453,6 +463,7 @@ class Controller(FeaturesMixin):
             keyboard.add_hotkey(self.s.hotkey_chat, self.sig.hotkey_chat.emit)
             keyboard.add_hotkey(self.s.hotkey_voice, self.sig.hotkey_voice.emit)
             self._feature_hotkeys(keyboard)
+            keyboard.on_press(self.typing.press)      # counts presses, never which keys
         except Exception as e:  # missing package, or no permission on Linux
             log.info("global hotkeys disabled: %s", e)
 
@@ -462,6 +473,7 @@ class Controller(FeaturesMixin):
     def _heartbeat(self) -> None:
         if self.s.aware:
             self.active = scan.active_window()
+        self._react_to_activity()
         for r in self.reminders.pop_due():
             self.say(f"Reminder: {r.message}", state="happy")
             self.cat.react("surprised", 1.0)
@@ -474,6 +486,25 @@ class Controller(FeaturesMixin):
                 and self.cat.state == "idle" and self.cat.mode == "rest"
                 and not self.hud.is_open()):
             self.cat.set_state("sleeping")
+
+    def _react_to_activity(self) -> None:
+        """Glasses while you code, a pencil while you write, a beret in Blender;
+        now and then a short line about it (bubble only, never spoken)."""
+        if not (self.s.aware and self.s.react_activity):
+            self.cat.set_prop("")
+            return
+        act = activity.detect(*self.active)
+        line = self.tracker.update(act)
+        if not line:
+            line = self.tracker.typing_burst(self.typing.rate(window=4.0))
+        self.cat.set_prop(activity.PROPS.get(self.tracker.current.kind, ""))
+        quiet = (self.busy or self.hud.is_open() or self.dnd or self.focus.active
+                 or self.cat.state == "sleeping"
+                 or (self.tracker.current.kind == "watching" and self.cat.music))
+        if line and not quiet:
+            self.hud.say(line, seconds=5)
+            self.cat.set_state("happy")
+            QTimer.singleShot(1500, self._settle)
 
     def _maybe_reflect_idle(self) -> None:
         """Learn from the latest chat once you've gone quiet for a few minutes,

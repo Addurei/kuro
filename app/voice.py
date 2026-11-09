@@ -4,7 +4,9 @@ Listening: push-to-talk. Press the voice hotkey, speak, and the cat
 transcribes what you said (Google's free speech API via the
 SpeechRecognition package, so it needs internet).
 
-Speaking: pyttsx3, which uses the built-in Windows voices (works offline).
+Speaking: the built-in Windows voices (SAPI) through comtypes, which
+Kuro already has for volume control. Works offline. (pyttsx3 did the same
+but dragged in ~40 MB of pywin32.)
 
 Both are optional. If a package or microphone is missing, the cat keeps
 working by text and tells you why voice is off.
@@ -27,15 +29,25 @@ class Speaker:
         threading.Thread(target=self._run, daemon=True, name="tts").start()
         self._ready.wait(timeout=5)
 
+    @staticmethod
+    def sapi_rate(wpm: int) -> int:
+        """SAPI speed is -10..10 with 0 ≈ 170 words/min, ~ +10 wpm per step."""
+        return max(-10, min(10, round((wpm - 170) / 10)))
+
     def _run(self) -> None:
         try:
-            import pyttsx3
-            engine = pyttsx3.init()
-            engine.setProperty("rate", self._rate)
+            import comtypes
+            import comtypes.client
+            comtypes.CoInitialize()               # COM on this thread only
+            voice = comtypes.client.CreateObject("SAPI.SpVoice")
+            voice.Rate = self.sapi_rate(self._rate)
             # Prefer a female voice if one is installed (Windows "Zira").
-            for v in engine.getProperty("voices"):
-                if "zira" in v.name.lower() or "female" in v.name.lower():
-                    engine.setProperty("voice", v.id)
+            voices = voice.GetVoices()
+            for i in range(voices.Count):
+                v = voices.Item(i)
+                desc = v.GetDescription().lower()
+                if "zira" in desc or "female" in desc:
+                    voice.Voice = v
                     break
             self.available = True
         except Exception as e:
@@ -48,8 +60,7 @@ class Speaker:
             if text is None:
                 break
             try:
-                engine.say(text)
-                engine.runAndWait()
+                voice.Speak(text, 0)              # 0 = speak now, wait until done
             except Exception:
                 pass
 

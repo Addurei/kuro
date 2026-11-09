@@ -251,17 +251,32 @@ def read_file(path: str, max_chars: int = 8000) -> str:
         reader = PdfReader(str(p))
         text = "\n".join((pg.extract_text() or "") for pg in reader.pages[:40])
     elif ext == ".docx":
-        try:
-            import docx
-        except ImportError:
-            raise ToolError("reading Word files needs python-docx (run setup.bat)")
-        text = "\n".join(par.text for par in docx.Document(str(p)).paragraphs)
+        text = docx_text(p)
     else:
         raise ToolError(f"I can read text, PDF and Word files, not {ext or 'this type'}")
     text = text.strip() or "(the file has no readable text)"
     if len(text) > max_chars:
         text = text[:max_chars] + f"\n...[truncated, {len(text) - max_chars} more characters]"
     return f"Contents of {p.name}:\n{text}"
+
+
+def docx_text(p: Path) -> str:
+    """Text of a Word file, paragraph by paragraph. A .docx is a zip of XML,
+    so the standard library is enough (no 20 MB python-docx + lxml)."""
+    import html as _html
+    import zipfile
+    try:
+        with zipfile.ZipFile(p) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except (zipfile.BadZipFile, KeyError, OSError) as e:
+        raise ToolError(f"couldn't open that Word file ({e})")
+    paras = []
+    for para in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
+        para = re.sub(r"<w:tab/>", "\t", para)
+        para = re.sub(r"<w:br/>", "\n", para)
+        bits = re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>|(\t)|(\n)", para, re.S)
+        paras.append(_html.unescape("".join(a or b or c for a, b, c in bits)))
+    return "\n".join(paras)
 
 
 # --------------------------------------------------------------------------

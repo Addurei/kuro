@@ -22,11 +22,15 @@ def test_read_text_and_docx(tmp_path):
     out = T.read_file(str(tmp_path / "notes.md"))
     assert "campus navigation" in out and out.startswith("Contents of notes.md")
 
-    import docx
-    d = docx.Document()
-    d.add_paragraph("Saint Thomas campus map")
-    d.save(tmp_path / "plan.docx")
-    assert "Saint Thomas campus map" in T.read_file(str(tmp_path / "plan.docx"))
+    import zipfile                       # a minimal real .docx: zip + document.xml
+    with zipfile.ZipFile(tmp_path / "plan.docx", "w") as z:
+        z.writestr("word/document.xml",
+                   '<w:document xmlns:w="x"><w:body>'
+                   '<w:p><w:r><w:t>Saint Thomas </w:t></w:r><w:r><w:t>campus map</w:t></w:r></w:p>'
+                   '<w:p><w:r><w:t xml:space="preserve">Rose &amp; Dome</w:t></w:r></w:p>'
+                   '</w:body></w:document>')
+    out = T.read_file(str(tmp_path / "plan.docx"))
+    assert "Saint Thomas campus map\nRose & Dome" in out
 
 
 def test_read_file_limits_and_errors(tmp_path):
