@@ -1,7 +1,7 @@
 """Wires everything together: Kuro, his HUD, brain, tools, memory, voice.
 
 Threading rule: Qt widgets may only be touched on the main thread.
-Slow work (Gemini calls, listening) runs on worker threads and reports
+Slow work (brain calls, listening) runs on worker threads and reports
 back through Qt signals, which Qt delivers safely to the main thread.
 """
 from __future__ import annotations
@@ -15,13 +15,13 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .brain import Brain, context_prompt
+from .brain import Brain, context_prompt, strip_actions
 from . import scan
 from .config import Settings, app_root, data_dir
 from .features import FeaturesMixin
 from .memory import HabitLog, MemoryStore, Reflector
 from .music import MusicWatcher
-from .providers import GeminiProvider
+from . import providers
 from .reminders import ReminderStore
 from .tools import Tool, build_tools
 from .ui import theme
@@ -70,9 +70,9 @@ class _ConfirmJob:
         self.done = threading.Event()
 
 
-def test_key(key: str) -> str:
-    """Used by Settings → Test: one tiny Gemini call with this key."""
-    return GeminiProvider(key).test()
+def test_key(provider: str, key: str, model: str = "") -> str:
+    """Used by Settings → Test: one tiny call to the chosen brain."""
+    return providers.make(provider, key, model).test()
 
 
 class Controller(FeaturesMixin):
@@ -179,6 +179,15 @@ class Controller(FeaturesMixin):
         self.cat.show()
         self.hud.chat.set_status("online" if settings.ready else "offline")
         QTimer.singleShot(600, self._greet)
+        # find the city quietly in the background (for weather), nothing to type
+        threading.Thread(target=self._locate, daemon=True, name="locate").start()
+
+    def _locate(self) -> None:
+        try:
+            from . import location
+            location.locate(self.s)
+        except Exception as e:
+            log.info("auto-location skipped: %s", e)
 
     # ------------------------------------------------------------------
     # chat
@@ -233,6 +242,9 @@ class Controller(FeaturesMixin):
         if self.pending_suggestion:
             extra.append(f"You just offered (unprompted) to {self.pending_suggestion} because "
                          f"{u} usually does that around now. If they say yes, do it.")
+        where = self.s.city.strip() or self.s.auto_city
+        if where:
+            extra.append(f"{u} is in or near {where} (use it for weather and local questions).")
         if self.s.aware:
             app, title = self.active
             if app:
@@ -267,6 +279,7 @@ class Controller(FeaturesMixin):
     def say(self, text: str, state: str = "talking") -> None:
         """Kuro says a line: HUD bubble (or the open chat), animation, voice.
         During do-not-disturb, lines are held and delivered afterwards."""
+        text = strip_actions(text) or text
         if self.dnd:
             self._held.append(text if len(text) < 140 else text[:137] + "…")
             return
@@ -400,7 +413,7 @@ class Controller(FeaturesMixin):
             self._resume_wake()
         self.hud.chat.set_status("online")
         if not text:
-            self.say("Mrrp? I didn't catch that.", state="idle")
+            self.say("Sorry, I didn't catch that.", state="idle")
             return
         if self.hud.page != "chat":
             self.hud.open("chat")
@@ -495,19 +508,18 @@ class Controller(FeaturesMixin):
         was_asleep = self.cat.state == "sleeping"
         self._touch()
         if was_asleep:
-            self.say("*yawn* …I'm up!", state="happy")
+            self.say("I'm up!", state="happy")
         else:
             self.cat.set_state("happy")
             self.cat.hop(150)
             QTimer.singleShot(1200, self._settle)
 
     def _greet(self) -> None:
+        """No spoken hello on startup. Only a silent setup hint when he has
+        no brain yet, so a new user knows what to do."""
         if not self.s.ready:
-            self.say("Hi! Right-click me → Settings and paste your Gemini key so I can think.",
-                     state="happy")
-        else:
-            hello = "Welcome back" if self.brain.history or self.memory.all() else "Hi"
-            self.say(f"Mrrp! {hello}, {self.s.user_name}.", state="happy")
+            self.hud.say("Right-click me → Settings → AI & Voice to pick my brain.",
+                         seconds=8)
 
     def quit(self) -> None:
         try:

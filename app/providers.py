@@ -1,14 +1,24 @@
-"""Kuro's brain: Google Gemini, through its native REST API.
+"""Kuro's brain. Pick one in Settings → AI & Voice:
+
+  gemini      Google Gemini (free key)          native REST API
+  groq        Groq (free key, very fast)        OpenAI-compatible
+  openrouter  OpenRouter (free models)          OpenAI-compatible
+  ollama      Ollama (free, offline, on PC)     OpenAI-compatible, no key
+  openai      OpenAI (paid key)                 OpenAI-compatible
+  claude      Anthropic Claude (paid key)       native Messages API
 
 Kuro keeps one conversation format internally (Anthropic-style content
-blocks, see brain.py). This module translates it to Gemini's `contents`
-/ `parts` format and back.
+blocks, see brain.py). Each provider translates it to its own API and
+back, and they all offer the same methods: chat, complete, vision,
+web_answer, test.
 
-Free keys only work on some models, and limits change, so Kuro tries a
-short list of models in order and sticks with the first one that works.
+Models change all the time, so unless you type one in Settings, Kuro asks
+the provider which models this key can use and picks the best one.
 """
 from __future__ import annotations
 
+import base64
+import html as _html
 import json
 import logging
 import re
@@ -183,6 +193,7 @@ def classify(status: int, body: str) -> ProviderError:
 # ------------------------------------------------------------- provider
 class GeminiProvider:
     name = "gemini"
+    label = "Gemini"
 
     def __init__(self, api_key: str, model: str = "", timeout: float = 60.0):
         self.api_key = api_key.strip()
@@ -288,5 +299,412 @@ class GeminiProvider:
         return self.model
 
 
-def make_provider(settings) -> GeminiProvider:
-    return GeminiProvider(settings.gemini_key, settings.model)
+
+
+# ===================================================================== presets
+PRESETS: dict[str, dict] = {
+    "gemini": {"label": "Gemini", "tag": "free", "needs_key": True,
+               "key_url": "https://aistudio.google.com/apikey",
+               "key_hint": "Free key from Google AI Studio"},
+    "groq": {"label": "Groq", "tag": "free", "needs_key": True,
+             "base": "https://api.groq.com/openai/v1",
+             "key_url": "https://console.groq.com/keys",
+             "key_hint": "Free key, very fast replies",
+             "prefer": ["openai/gpt-oss-120b", "llama-3.3-70b", "kimi-k2", "qwen3-32b",
+                        "llama-4", "gpt-oss-20b"],
+             "light": ["llama-3.1-8b-instant", "gpt-oss-20b", "llama-3.3-70b"],
+             "skip": ["whisper", "tts", "guard", "playai", "orpheus", "distil", "compound"]},
+    "openrouter": {"label": "OpenRouter", "tag": "free", "needs_key": True,
+                   "base": "https://openrouter.ai/api/v1",
+                   "key_url": "https://openrouter.ai/keys",
+                   "key_hint": "Free key; Kuro only uses the free models",
+                   "prefer": ["deepseek", "qwen3", "gpt-oss", "llama-3.3-70b", "gemini",
+                              "mistral", "glm"],
+                   "free_only": True},
+    "ollama": {"label": "Ollama", "tag": "offline", "needs_key": False,
+               "base": "http://localhost:11434/v1",
+               "key_url": "https://ollama.com/download",
+               "key_hint": "Runs on this PC, no internet. Run setup_offline_brain.bat once",
+               "prefer": ["qwen3", "qwen2.5", "llama3.1", "llama3.2", "mistral", "gemma"]},
+    "openai": {"label": "OpenAI", "tag": "paid", "needs_key": True,
+               "base": "https://api.openai.com/v1",
+               "key_url": "https://platform.openai.com/api-keys",
+               "key_hint": "Paid key from OpenAI",
+               "prefer": ["gpt-5-mini", "gpt-5", "gpt-4.1-mini", "gpt-4o-mini"],
+               "light": ["gpt-5-nano", "gpt-4.1-nano", "gpt-5-mini", "gpt-4o-mini"],
+               "skip": ["audio", "realtime", "tts", "transcribe", "image", "embedding",
+                        "search", "moderation", "dall", "whisper", "codex", "instruct"],
+               "openai_params": True},
+    "claude": {"label": "Claude", "tag": "paid", "needs_key": True,
+               "key_url": "https://console.anthropic.com/settings/keys",
+               "key_hint": "Paid key from Anthropic"},
+}
+ORDER = ["gemini", "groq", "openrouter", "ollama", "openai", "claude"]
+
+
+def label(name: str) -> str:
+    return PRESETS.get(name, PRESETS["gemini"])["label"]
+
+
+# ===================================================================== shared
+def _http(method: str, url: str, headers: dict, body: dict | None = None,
+          timeout: float = 60.0, who: str = "the AI") -> dict:
+    try:
+        r = httpx.request(method, url, json=body, headers=headers, timeout=timeout)
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        raise ProviderError("connection", f"can't connect to {who}", str(e)) from e
+    except httpx.TimeoutException as e:
+        raise ProviderError("connection", "timed out", str(e)) from e
+    except httpx.HTTPError as e:
+        raise ProviderError("connection", type(e).__name__, str(e)) from e
+    if r.status_code != 200:
+        raise classify(r.status_code, r.text)
+    try:
+        return r.json()
+    except ValueError as e:
+        raise ProviderError("other", f"bad JSON from {who}", r.text[:300]) from e
+
+
+def pick_models(available: list[str], prefer: list[str], skip: list[str] = ()) -> list[str]:
+    """Order the models a key can use: preferred names first (in order),
+    then the rest. Drops speech/image/embedding models."""
+    ok = [m for m in available if not any(k in m.lower() for k in skip)]
+    out: list[str] = []
+    for want in prefer:
+        out += [m for m in ok if want in m.lower() and m not in out]
+    return out + [m for m in ok if m not in out]
+
+
+def web_snippets(query: str, limit: int = 6) -> list[tuple[str, str, str]]:
+    """(title, url, snippet) from DuckDuckGo's plain HTML results, so
+    every brain can answer 'what's the news / score / price' questions."""
+    try:
+        r = httpx.get("https://html.duckduckgo.com/html/", params={"q": query},
+                      headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                      timeout=15, follow_redirects=True)
+    except httpx.HTTPError as e:
+        raise ProviderError("connection", "can't reach the web", str(e)) from e
+    out = []
+    blocks = re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                        r'class="result__snippet"[^>]*>(.*?)</a>', r.text, re.S)
+    for href, title, snip in blocks[:limit]:
+        m = re.search(r"uddg=([^&]+)", href)
+        url = httpx.URL("https://x/?u=" + m.group(1)).params.get("u") if m else href
+        strip = lambda t: _html.unescape(re.sub(r"<[^>]+>", "", t)).strip()
+        out.append((strip(title), url, strip(snip)))
+    return out
+
+
+class _Base:
+    """What every non-Gemini brain shares: web answers from search snippets."""
+    label = "the AI"
+
+    def complete(self, prompt: str, max_tokens: int = 1024, light: bool = False) -> str:
+        raise NotImplementedError
+
+    def web_answer(self, question: str) -> tuple[str, list[tuple[str, str]]]:
+        hits = web_snippets(question)
+        if not hits:
+            return "I couldn't find anything on the web for that.", []
+        ctx = "\n".join(f"[{i + 1}] {t}: {s}" for i, (t, _u, s) in enumerate(hits))
+        text = self.complete(
+            f"Today's web search results for: {question}\n\n{ctx}\n\n"
+            "Answer the question in 1-3 sentences using only these results. "
+            "If they don't contain the answer, say so.", 600)
+        return text, [(t, u) for t, u, _s in hits[:4]]
+
+    def test(self) -> str:
+        self.complete("Reply with just the word OK.", 16)
+        return self.model
+
+
+# ============================================================ OpenAI-compatible
+def to_openai(messages: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for m in messages:
+        c = m["content"]
+        if isinstance(c, str):
+            out.append({"role": m["role"], "content": c})
+            continue
+        if m["role"] == "user":
+            texts = []
+            for b in c:
+                if b.get("type") == "tool_result":
+                    content = str(b.get("content", ""))
+                    if b.get("is_error"):
+                        content = "ERROR: " + content
+                    out.append({"role": "tool", "tool_call_id": b["tool_use_id"],
+                                "content": content})
+                elif b.get("type") == "text":
+                    texts.append(b["text"])
+            if texts:
+                out.append({"role": "user", "content": "\n".join(texts)})
+            continue
+        text = " ".join(b.get("text", "") for b in c if b.get("type") == "text").strip()
+        calls = [{"id": b["id"], "type": "function",
+                  "function": {"name": b["name"],
+                               "arguments": json.dumps(b.get("input") or {})}}
+                 for b in c if b.get("type") == "tool_use"]
+        msg: dict = {"role": "assistant", "content": text or None}
+        if calls:
+            msg["tool_calls"] = calls
+        out.append(msg)
+    return out
+
+
+def openai_tools(tools: list[dict]) -> list[dict]:
+    out = []
+    for t in tools:
+        params = dict(t.get("input_schema") or {})
+        params.setdefault("type", "object")
+        params.setdefault("properties", {})
+        out.append({"type": "function", "function": {
+            "name": t["name"], "description": t["description"], "parameters": params}})
+    return out
+
+
+def from_openai(data: dict) -> Reply:
+    choices = data.get("choices") or []
+    if not choices:
+        raise ProviderError("blocked", "no answer", json.dumps(data)[:300])
+    msg = choices[0].get("message") or {}
+    blocks: list[dict] = []
+    text = msg.get("content") or ""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()   # reasoning models
+    if text:
+        blocks.append({"type": "text", "text": text})
+    calls = msg.get("tool_calls") or []
+    for c in calls:
+        fn = c.get("function") or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except ValueError:
+            args = {}
+        blocks.append({"type": "tool_use", "id": c.get("id") or f"call_{uuid.uuid4().hex[:10]}",
+                       "name": fn.get("name", ""), "input": args if isinstance(args, dict) else {}})
+    if not blocks:
+        blocks.append({"type": "text",
+                       "text": f"(My answer got cut off: {choices[0].get('finish_reason')}.)"})
+    return Reply("tool_use" if calls else "end_turn", blocks)
+
+
+class OpenAIProvider(_Base):
+    def __init__(self, name: str, api_key: str = "", model: str = "", timeout: float = 90.0):
+        self.name = name
+        self.p = PRESETS[name]
+        self.label = self.p["label"]
+        self.base = self.p["base"]
+        self.api_key = (api_key or "").strip()
+        self.timeout = timeout
+        self.fixed = model.strip()
+        self._models: list[str] | None = [self.fixed] if self.fixed else None
+        self._good = 0
+
+    def _headers(self) -> dict:
+        h = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
+        if self.name == "openrouter":
+            h["X-Title"] = "Kuro"
+        return h
+
+    @property
+    def models(self) -> list[str]:
+        if self._models is None:
+            data = _http("GET", self.base + "/models", self._headers(), timeout=20,
+                         who=self.label)
+            items = data.get("data") or data.get("models") or []
+            ids = []
+            for it in items:
+                mid = it.get("id") or it.get("name") if isinstance(it, dict) else str(it)
+                if not mid:
+                    continue
+                if self.p.get("free_only"):
+                    params = it.get("supported_parameters") or []
+                    if not mid.endswith(":free") or (params and "tools" not in params):
+                        continue
+                ids.append(mid)
+            ordered = pick_models(ids, self.p.get("prefer", []), self.p.get("skip", []))
+            if not ordered:
+                hint = {"ollama": "No models installed yet. Run setup_offline_brain.bat.",
+                        "openrouter": "No free tool-using models are available right now."
+                        }.get(self.name, "This key can't use any chat models.")
+                raise ProviderError("model_missing", "no models", hint)
+            self._models = ordered[:6]
+        return self._models
+
+    @property
+    def model(self) -> str:
+        return self.models[min(self._good, len(self.models) - 1)]
+
+    def _light_order(self) -> list[int]:
+        ms = self.models
+        for want in self.p.get("light", []):
+            for i, m in enumerate(ms):
+                if want in m.lower():
+                    return [i] + [j for j in range(len(ms)) if j != i]
+        return [self._good] + [j for j in range(len(ms)) if j != self._good]
+
+    def _call(self, body: dict, light: bool = False) -> dict:
+        ms = self.models
+        order = self._light_order() if light else \
+            [self._good] + [i for i in range(len(ms)) if i != self._good]
+        last: ProviderError | None = None
+        for i in order[:4]:
+            try:
+                data = _http("POST", self.base + "/chat/completions", self._headers(),
+                             {**body, "model": ms[i]}, self.timeout, self.label)
+                if not light:
+                    self._good = i
+                return data
+            except ProviderError as e:
+                if self.name == "ollama" and e.kind == "connection":
+                    e.detail = "Ollama isn't running. Start the Ollama app, then try again."
+                log.warning("%s %s failed: %s %s", self.name, ms[i], e.kind, e.detail)
+                if e.kind not in ("rate", "model_missing", "bad_request") or self.fixed:
+                    raise
+                last = e
+        raise last  # type: ignore[misc]
+
+    def _limits(self, max_tokens: int, temperature: float) -> dict:
+        if self.p.get("openai_params"):            # newer OpenAI models: no temperature
+            return {"max_completion_tokens": max(max_tokens, 4096)}
+        return {"max_tokens": max_tokens, "temperature": temperature}
+
+    def chat(self, persona: str, context: str, tools: list[dict],
+             messages: list[dict], max_tokens: int) -> Reply:
+        body = {"messages": [{"role": "system", "content": persona + "\n\n" + context}]
+                + to_openai(messages), **self._limits(max(max_tokens, 1024), 0.7)}
+        if tools:
+            body["tools"] = openai_tools(tools)
+        return from_openai(self._call(body))
+
+    def complete(self, prompt: str, max_tokens: int = 1024, light: bool = False) -> str:
+        data = self._call({"messages": [{"role": "user", "content": prompt}],
+                           **self._limits(max(max_tokens, 256), 0.2)}, light=light)
+        return clean_text(" ".join(b["text"] for b in from_openai(data).content
+                                   if b["type"] == "text"))
+
+    def vision(self, prompt: str, jpeg: bytes) -> str:
+        url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
+        try:
+            data = self._call({"messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": url}}]}],
+                **self._limits(1024, 0.3)})
+        except ProviderError as e:
+            if e.kind in ("bad_request", "model_missing"):
+                raise ProviderError("other", "no vision",
+                                    f"This {self.label} model can't see images. "
+                                    "Gemini or Claude can.") from e
+            raise
+        return clean_text(" ".join(b["text"] for b in from_openai(data).content
+                                   if b["type"] == "text"))
+
+
+# ===================================================================== Claude
+CLAUDE_API = "https://api.anthropic.com/v1"
+CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-5"]
+
+
+def _claude_messages(messages: list[dict]) -> list[dict]:
+    out = []
+    for m in messages:
+        c = m["content"]
+        if isinstance(c, list):
+            c = [{k: v for k, v in b.items() if k != "extra"} for b in c]
+        out.append({"role": m["role"], "content": c})
+    return out
+
+
+class ClaudeProvider(_Base):
+    name = "claude"
+    label = "Claude"
+
+    def __init__(self, api_key: str, model: str = "", timeout: float = 90.0):
+        self.api_key = api_key.strip()
+        self.timeout = timeout
+        self.fixed = model.strip()
+        self._models: list[str] | None = [self.fixed] if self.fixed else None
+        self._good = 0
+
+    def _headers(self) -> dict:
+        return {"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"}
+
+    @property
+    def models(self) -> list[str]:
+        if self._models is None:
+            try:
+                data = _http("GET", CLAUDE_API + "/models?limit=100", self._headers(),
+                             timeout=20, who="Claude")
+                ids = [d["id"] for d in data.get("data", []) if d.get("id")]
+            except ProviderError as e:
+                if e.kind == "auth":
+                    raise
+                ids = []
+            ordered = pick_models(ids, ["haiku", "sonnet"], ["opus"]) or list(CLAUDE_MODELS)
+            self._models = ordered[:4]
+        return self._models
+
+    @property
+    def model(self) -> str:
+        return self.models[self._good]
+
+    def _call(self, body: dict) -> dict:
+        ms = self.models
+        order = [self._good] + [i for i in range(len(ms)) if i != self._good]
+        last: ProviderError | None = None
+        for i in order:
+            try:
+                data = _http("POST", CLAUDE_API + "/messages", self._headers(),
+                             {**body, "model": ms[i]}, self.timeout, "Claude")
+                self._good = i
+                return data
+            except ProviderError as e:
+                log.warning("claude %s failed: %s %s", ms[i], e.kind, e.detail)
+                if e.kind not in ("rate", "model_missing") or self.fixed:
+                    raise
+                last = e
+        raise last  # type: ignore[misc]
+
+    @staticmethod
+    def _reply(data: dict) -> Reply:
+        blocks = [b for b in data.get("content", []) if b.get("type") in ("text", "tool_use")]
+        return Reply("tool_use" if data.get("stop_reason") == "tool_use" else "end_turn", blocks)
+
+    def _text(self, data: dict) -> str:
+        return clean_text(" ".join(b.get("text", "") for b in self._reply(data).content
+                                   if b["type"] == "text"))
+
+    def chat(self, persona: str, context: str, tools: list[dict],
+             messages: list[dict], max_tokens: int) -> Reply:
+        body = {"system": persona + "\n\n" + context, "max_tokens": max(max_tokens, 1024),
+                "messages": _claude_messages(messages)}
+        if tools:
+            body["tools"] = tools
+        return self._reply(self._call(body))
+
+    def complete(self, prompt: str, max_tokens: int = 1024, light: bool = False) -> str:
+        return self._text(self._call({"max_tokens": max(max_tokens, 256),
+                                      "messages": [{"role": "user", "content": prompt}]}))
+
+    def vision(self, prompt: str, jpeg: bytes) -> str:
+        return self._text(self._call({"max_tokens": 1024, "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                         "data": base64.b64encode(jpeg).decode("ascii")}},
+            {"type": "text", "text": prompt}]}]}))
+
+
+# ===================================================================== factory
+def make(name: str, key: str = "", model: str = ""):
+    name = name if name in PRESETS else "gemini"
+    if name == "gemini":
+        return GeminiProvider(key, model)
+    if name == "claude":
+        return ClaudeProvider(key, model)
+    return OpenAIProvider(name, key, model)
+
+
+def make_provider(settings):
+    return make(settings.provider, settings.key_for(), settings.model)

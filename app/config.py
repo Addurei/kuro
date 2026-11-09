@@ -1,7 +1,7 @@
 """Settings: defaults, overridden by config.json, overridden by env vars.
 
-The Gemini key is never stored in code. Paste it in Settings (saved to
-config.json in your AppData folder) or set the GEMINI_API_KEY variable.
+API keys are never stored in code. Paste one in Settings → AI & Voice
+(saved to config.json in your AppData folder) or set GEMINI_API_KEY.
 """
 import json
 import logging
@@ -46,12 +46,13 @@ class Settings:
     personality: str = (
         "a cute, playful, slightly sassy black cat with small magical powers "
         "(you can walk on air and blink across the screen), who is secretly very "
-        "capable. Short, warm replies. Occasional cat mannerisms (a 'mrrp', "
-        "a stretch) but never more than one per reply, and never at the "
-        "expense of being useful."
+        "capable. Short, warm, lively replies with a bit of cat attitude in the "
+        "wording itself. Never act out cat actions or sounds."
     )
+    provider: str = "gemini"          # gemini | groq | openrouter | ollama | openai | claude
     gemini_key: str = ""
-    model: str = ""                   # "" = automatic (best free model that works)
+    keys: dict = field(default_factory=dict)   # keys for the other brains
+    model: str = ""                   # "" = automatic (best model the key can use)
     max_tokens: int = 1024
 
     # behaviour
@@ -60,7 +61,11 @@ class Settings:
     chat_size: str = "medium"         # small | medium | large
     dnd_fullscreen: bool = True       # hide while a fullscreen game / video is in front
     morning_briefing: bool = True     # first time you see him each day
-    city: str = ""                    # for the weather in the briefing
+    city: str = ""                    # optional override; normally found automatically
+    auto_city: str = ""               # found from your connection (app/location.py)
+    auto_lat: float = 0.0
+    auto_lon: float = 0.0
+    auto_located: str = ""            # date it was last looked up
     last_briefing: str = ""           # date of the last automatic briefing
     sleep_after_minutes: int = 5
     history_turns: int = 20           # user turns kept in context
@@ -104,9 +109,23 @@ class Settings:
     def path(self) -> Path:
         return data_dir() / "config.json"
 
+    def key_for(self, provider: str | None = None) -> str:
+        p = provider or self.provider
+        if p == "gemini":
+            return self.gemini_key
+        return str((self.keys or {}).get(p, ""))
+
+    def set_key(self, provider: str, key: str) -> None:
+        if provider == "gemini":
+            self.gemini_key = key
+        else:
+            self.keys = {**(self.keys or {}), provider: key}
+
     @property
     def ready(self) -> bool:
-        return bool(self.gemini_key.strip())
+        if self.provider == "ollama":
+            return True                   # local: no key needed
+        return bool(self.key_for().strip())
 
     def save(self) -> None:
         data = asdict(self)
@@ -139,4 +158,9 @@ def load_settings() -> Settings:
         s.model = ""
     if not isinstance(s.gemini_key, str):
         s.gemini_key = ""
+    if not isinstance(s.keys, dict):
+        s.keys = {}
+    from .providers import PRESETS
+    if s.provider not in PRESETS:
+        s.provider = "gemini"
     return s

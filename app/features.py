@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QTimer
 
-from . import briefing, quick, study, winutil
+from . import briefing, location, quick, study, winutil
 from .focus import FocusTimer
 from .google import Google, GoogleError, fmt_email, fmt_event
 from .tools import Tool, ToolError, _obj, _resolve_file, read_file
@@ -236,12 +236,10 @@ class FeaturesMixin:
     def _build_briefing(self) -> str:
         now = datetime.now()
         weather, events, unread = "", None, None
-        if self.s.city and self.s.ready:
-            try:
-                weather, _src = self.brain.provider.web_answer(
-                    briefing.WEATHER_Q.format(city=self.s.city))
-            except Exception as e:
-                log.info("briefing weather skipped: %s", e)
+        try:
+            weather = location.weather(self.s)          # no city to type, any brain
+        except Exception as e:
+            log.info("briefing weather skipped: %s", e)
         if self.google.connected:
             try:
                 events = [fmt_event(e) for e in self.google.events(1)]
@@ -319,7 +317,7 @@ class FeaturesMixin:
     # ================================================================ quick actions
     def _quick_hotkey(self) -> None:
         if not self.s.ready:
-            self.say("I need my Gemini key first (Settings → AI).", state="idle")
+            self.say("I need a brain first (Settings → AI & Voice).", state="idle")
             return
         self._quick_hwnd = winutil.foreground_window()
 

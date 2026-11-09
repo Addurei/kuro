@@ -1,15 +1,24 @@
 # Kuro 🐈‍⬛
 
-A little black cat with small magical powers who lives on your Windows desktop, talks with you, and actually does things on your PC. His brain is Google Gemini (free key).
+A little black cat with small magical powers who lives on your Windows desktop, talks with you, and actually does things on your PC. You pick his brain: Gemini, Groq or OpenRouter (free keys), Ollama (free, offline), or OpenAI / Claude (paid).
 
 ## Quick start
 
 1. Install **Python 3.12** (python.org, tick "Add python.exe to PATH").
 2. Double-click **`setup.bat`** once.
-3. Get a free key at **aistudio.google.com/apikey** (Google account, no card).
-4. Double-click **`run.bat`** → right-click Kuro → ⚙ Settings → paste the key → **TEST** → **SAVE**.
+3. Double-click **`run.bat`** → right-click Kuro → ⚙ Settings → **AI & Voice**.
+4. Pick a brain, paste its key (the "Get a key ↗" link takes you there) and press **Test**. Changes save by themselves.
 
-If TEST fails, it shows Google's exact reason (bad key, no internet, limit reached…). Errors are also logged to `%APPDATA%\Kuro\kuro.log`.
+| Brain | Cost | Notes |
+|---|---|---|
+| Gemini | free key | Best all-rounder; can see your screen and images |
+| Groq | free key | Very fast replies |
+| OpenRouter | free key | Kuro only uses its free models |
+| Ollama | free, offline | Runs on your PC (run `setup_offline_brain.bat` once; ~16 GB RAM recommended) |
+| OpenAI / Claude | paid key | Strongest; both can see images |
+
+Kuro picks the best model each key can use; type one in Settings → Model to override it.
+If Test fails, it shows the provider's exact reason (bad key, no internet, limit reached…). Errors are also logged to `%APPDATA%\Kuro\kuro.log`.
 
 ## Using him
 
@@ -28,10 +37,11 @@ If TEST fails, it shows Google's exact reason (bad key, no internet, limit reach
 
 - **Chat in character**, typed out in his HUD and spoken aloud. Chat size: Settings → General.
 - **Control your PC**: apps, sites, files, folders, windows, volume, media, screenshots, clipboard, lock. Power actions and PowerShell always ask first.
+  Apps are found by name (Start menu, Store apps, installed programs), and he waits for the window to actually appear before saying it's open. If it doesn't, he tells you.
 - **Scan** (just ask): a document, PDF, Word file, code, an image, copied or pasted text, the song playing, your screen, or your PC.
 - **Study mode**: "make a quiz from biology.pdf" or "flashcards from these notes". Opens in the Study panel. Every question is checked (4 distinct options, one valid answer) before it's shown.
 - **Focus companion**: right-click → FOCUS (or "focus for 50 minutes"). Pomodoro cycles; he naps on the taskbar with a timer ring, wakes you for breaks, cheers at the end, and keeps daily stats.
-- **Daily briefing**: once a day, the first time he sees you: weather (set your city), today's calendar, reminders, unread mail, yesterday's focus. Or ask "brief me".
+- **Daily briefing**: once a day, the first time he sees you: weather (he finds your city from your connection, nothing to type), today's calendar, reminders, unread mail, yesterday's focus. Or ask "brief me".
 - **Google Calendar + Gmail** (optional): see and add events (adding asks first), read your inbox. Gmail is read-only: he can never send, delete or change mail.
 - **Reminders** that survive restarts.
 - **Learns about you** (Right-click → Memory to review or forget).
@@ -70,7 +80,9 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/focus.py` · `app/study.py` · `app/briefing.py` · `app/google.py` | The logic behind them |
 | `app/ui/hud.py` | The pinned HUD (all pages) and the radial menu |
 | `app/ui/theme.py` | Matte look, running border light, icons |
-| `app/providers.py` | Gemini native API: format translation, free-model fallback, error reasons |
+| `app/providers.py` | All six brains: format translation, automatic model choice, fallbacks, error reasons |
+| `app/launcher.py` | Finding, opening and confirming apps |
+| `app/location.py` | Automatic city + weather (Open-Meteo, free, no key) |
 | `app/brain.py` | Tool-use loop, persona, history |
 | `app/tools.py` | Every PC action. **Add new abilities here** |
 | `app/memory.py` | Facts, habits, background reflection |
@@ -78,11 +90,12 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
 ## Tests
 
-`python -m pytest` runs the test suite (94 tests): tools, scans, memory, the tool loop, Gemini against a mocked server, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
+`python -m pytest` runs the test suite (115 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
 
 ## Known limits
 
-- Free Gemini has rate limits. When he hits one, he says so and tries the next free model.
+- Free brains have rate limits. When he hits one, he says so and tries the next model.
+- Web answers (news, scores) use Google Search with Gemini, and a DuckDuckGo search with the other brains.
 - Voice recognition (and the wake word) uses Google's free web speech service, so it needs internet. The wake word only sends short phrases that sound like speech.
 - On Windows, clicks pass through the transparent area around the HUD. This hasn't been verified on real hardware yet.
 

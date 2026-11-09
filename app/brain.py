@@ -7,18 +7,19 @@ Flow for one message:
 
 `ask()` blocks, so the UI calls it from a worker thread.
 
-The thinking is done by Google Gemini (app/providers.py).
+The thinking is done by whichever brain is picked in Settings (app/providers.py).
 """
 from __future__ import annotations
 
 import datetime as _dt
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Callable
 
 from .config import Settings
-from .providers import GeminiProvider, ProviderError, make_provider
+from .providers import GeminiProvider, ProviderError, label, make_provider
 from .tools import Tool, run_tool
 
 MAX_TOOL_ROUNDS = 8
@@ -35,7 +36,8 @@ You live as a little animated black cat on {s.user_name}'s Windows desktop and h
 
 How you reply:
 - Your words appear in a small speech bubble and may be read aloud, so keep replies short (1-3 sentences) unless asked for detail. No markdown, no bullet lists, no emoji spam.
-- Stay in character, but being genuinely useful always comes first.
+- Stay in character through your wording and attitude, but being genuinely useful always comes first.
+- Never write actions, sounds or stage directions in asterisks or brackets (no *yawns*, *wags tail*, *purrs*, *mrrp*, (stretches)). Just talk.
 
 How you act:
 - Use your tools to actually do things rather than describing how the user could do them.
@@ -43,6 +45,7 @@ How you act:
 - Never use PowerShell to delete, overwrite or move files, change system settings, or download things unless the user explicitly asked for exactly that.
 - If a tool returns an error, explain it plainly and suggest what to try.
 - If you can't do something, say so honestly. Never pretend an action happened.
+- After a tool runs, base what you say on its result. If open_app says no window appeared or the app wasn't found, say exactly that, never "it's open".
 - To see or read anything (the screen, a file or image, copied text, the song playing, the PC), use scan, and only when asked. Report scan results exactly: quote numbers, names and text as given, say plainly when something wasn't found, and never fill gaps with guesses. Never describe what is on the screen, in a file, or on a website without having actually scanned it.
 - Never try to identify real people from their faces or photos.
 - For questions about things that change (news, sports scores, weather, prices), use web_answer and give the answer in chat. Use web_search only when they want to browse results.
@@ -54,6 +57,23 @@ How you learn:
 - You have a long-term memory (shown below as "What you know") and a record of {s.user_name}'s habits. Use them naturally to personalise help: their projects, their preferences, what they usually do at this time. Don't recite them back unprompted, and never make them feel watched.
 - When {s.user_name} tells you something worth knowing next time, or says "remember", call remember. If they say to forget something, or a fact is wrong, call forget.
 - Memory lives only on this computer, in the Kuro folder of AppData. You keep learning automatically from your chats (what they tell you, how they like things done) and get better over time. If asked what you know, use recall. If asked to forget something, use forget; to wipe everything, use forget_everything (it asks them first)."""
+
+
+# *yawns*, *wags tail*, (stretches), [mrrp]: roleplay actions. The
+# persona forbids them, and this catches any that slip through anyway.
+_ACTION = re.compile(
+    r"\*{1,2}[A-Za-z][A-Za-z' ,;.~-]{0,40}?\*{1,2}"
+    r"|[(\[]\s*(?:mrr+p|mr+o+w|purr+s?|meow|yawns?|stretch(?:es)?|wags?[^)\]]{0,20}|"
+    r"tail[^)\]]{0,20}|blinks?[^)\]]{0,20}|ears?[^)\]]{0,20})\s*[)\]]",
+    re.I)
+
+
+def strip_actions(text: str) -> str:
+    out = _ACTION.sub("", text or "")
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"^\s*[,.…!]+\s*", "", out)           # "*yawn* …I'm up" -> "I'm up"
+    out = re.sub(r"\s+([,.!?…])", r"\1", out)
+    return out.strip()
 
 
 def context_prompt(s: Settings, memory_text: str = "", habits_text: str = "",
@@ -140,7 +160,7 @@ class Brain:
             if resp.stop_reason != "tool_use":
                 text = " ".join(b.get("text", "") for b in content
                                 if b.get("type") == "text").strip()
-                return text or "Mrrp?"
+                return strip_actions(text) or "Hmm, I lost my words there. Try again?"
 
             results = []
             for block in content:
@@ -222,21 +242,24 @@ class Brain:
         return out
 
     def _friendly_error(self, e: Exception) -> str:
+        who = label(self.s.provider)
         if isinstance(e, RuntimeError) and "API key" in str(e):
-            return ("I need my Gemini key first! Right-click me, open Settings, "
+            return (f"I need my {who} key first! Right-click me, open Settings → AI & Voice, "
                     "and paste it in.")
         if not isinstance(e, ProviderError):
             log.exception("brain error")
             return f"Something went wrong ({type(e).__name__}). Try again?"
         log.warning("brain error %s: %s", e.kind, e.detail)
         if e.kind == "auth":
-            return "Gemini rejected my key. Could you check it in Settings? The Test button there tells you why."
+            return f"{who} rejected my key. Could you check it in Settings? The Test button there tells you why."
         if e.kind == "rate":
-            return "I've hit Gemini's free limit for a moment. Give me a minute and ask again."
+            return f"I've hit {who}'s limit for a moment. Give me a minute and ask again."
         if e.kind == "connection":
-            return "I can't reach Gemini. Is the internet on? (Settings → Test shows the details.)"
+            if self.s.provider == "ollama":
+                return "I can't reach Ollama. Is the Ollama app running?"
+            return f"I can't reach {who}. Is the internet on? (Settings → Test shows the details.)"
         if e.kind == "model_missing":
-            return "None of my Gemini models are available for this key right now. Try Settings → Test."
+            return f"No {who} model is available right now. {e.detail or 'Try Settings → Test.'}"
         if e.kind == "blocked":
-            return "Gemini wouldn't answer that one."
+            return f"{who} wouldn't answer that one."
         return f"My brain hiccuped: {e.detail[:140] or e}"

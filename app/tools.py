@@ -49,41 +49,14 @@ class ToolError(Exception):
 # --------------------------------------------------------------------------
 # Apps, files, URLs
 # --------------------------------------------------------------------------
-# Friendly names -> what to launch. Extend this freely.
-APP_ALIASES = {
-    "notepad": "notepad.exe",
-    "calculator": "calc.exe",
-    "calc": "calc.exe",
-    "paint": "mspaint.exe",
-    "explorer": "explorer.exe",
-    "file explorer": "explorer.exe",
-    "files": "explorer.exe",
-    "task manager": "taskmgr.exe",
-    "settings": "ms-settings:",
-    "cmd": "cmd.exe",
-    "terminal": "wt.exe",
-    "powershell": "powershell.exe",
-    "chrome": "chrome",
-    "edge": "msedge",
-    "firefox": "firefox",
-    "spotify": "spotify:",
-    "vscode": "code",
-    "vs code": "code",
-    "code": "code",
-    "blender": "blender",
-    "unity hub": "Unity Hub",
-    "discord": "discord:",
-    "word": "winword",
-    "excel": "excel",
-    "powerpoint": "powerpnt",
-}
-
-
 def _launch(target: str) -> None:
+    """Open a file, folder or URL with its default handler. Raises if Windows
+    can't (unlike `start` in a hidden shell, which failed silently)."""
     if IS_WINDOWS:
-        # `start` resolves App Paths, protocols (spotify:) and .exe names.
-        subprocess.Popen(f'start "" "{target}"', shell=True,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            os.startfile(target)  # type: ignore[attr-defined]
+        except OSError as e:
+            raise ToolError(f"Windows couldn't open {target}: {e.strerror or e}") from e
     elif shutil.which("xdg-open"):
         subprocess.Popen(["xdg-open", target])
     else:
@@ -91,12 +64,11 @@ def _launch(target: str) -> None:
 
 
 def open_app(name: str) -> str:
-    key = name.lower().strip()
-    target = APP_ALIASES.get(key, name.strip())
-    if not target:
-        raise ToolError("no app name given")
-    _launch(target)
-    return f"Launched {name}."
+    from . import launcher
+    try:
+        return launcher.open_app(name)
+    except launcher.LaunchError as e:
+        raise ToolError(str(e)) from e
 
 
 # Where browsers usually live on Windows: (environment folder, path inside it)
@@ -525,7 +497,7 @@ def build_tools(reminders: ReminderStore, search_roots: list[str],
                 allow_shell: bool = True, memory=None, brain=None,
                 capture=None, music=None, seek=None, scan=None,
                 scan_fx=None) -> dict[str, Tool]:
-    """`brain` is a callable returning the Gemini provider (for seeing the
+    """`brain` is a callable returning the current brain provider (for seeing the
     screen and live web answers); `capture` grabs the screen as JPEG."""
     def add_reminder(message: str, in_minutes: float | None = None,
                      at: str | None = None) -> str:
@@ -548,8 +520,11 @@ def build_tools(reminders: ReminderStore, search_roots: list[str],
         raise ToolError(f"no reminder with id {reminder_id}")
 
     tools = [
-        Tool("open_app", "Launch a desktop app by name (e.g. 'notepad', "
-             "'spotify', 'vscode', 'blender') or by an .exe name.",
+        Tool("open_app", "Launch a desktop app by name (e.g. 'notepad', 'spotify', "
+             "'vscode', 'blender', 'unity hub') or by an .exe name. Finds installed and "
+             "Store apps, brings it to the front if it's already open, and waits to "
+             "confirm its window appeared. Repeat the result honestly: if it says no "
+             "window appeared or the app wasn't found, tell the user that.",
              _obj({"name": {"type": "string"}}, ["name"]), open_app),
         Tool("open_url", "Open a website. Pass `browser` (e.g. 'opera gx', 'chrome', "
              "'edge', 'firefox', 'brave') if the user names one or prefers one; "
@@ -641,7 +616,7 @@ def build_tools(reminders: ReminderStore, search_roots: list[str],
             return text
 
         tools += [
-            Tool("web_answer", "Answer from live Google Search: news, scores, weather, "
+            Tool("web_answer", "Answer from a live web search: news, scores, weather, "
                  "prices, facts that change. Reply in chat with the answer.",
                  _obj({"question": {"type": "string"}}, ["question"]), web_answer),
         ]

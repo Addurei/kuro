@@ -4,7 +4,7 @@ It follows him in real time and morphs between pages:
 
     bubble    what he just said (click it to open the chat)
     chat      the conversation
-    settings  your name, Gemini key (with a Test button), a few switches
+    settings  your name, the brain (Gemini, Groq, Ollama, …) with a Test button, switches
     memory    what he has learned about you
     confirm   "allow this?" before anything risky
 
@@ -25,11 +25,12 @@ import threading
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton,
+from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import theme
+from .. import providers as P
 from .cat_rig import Spring
 from .theme import DIM_HEX, FAINT_HEX, LIME_HEX, TEXT_HEX
 
@@ -626,7 +627,7 @@ class SettingsPage(QWidget):
         top.addStretch()
         top.addWidget(self.saved_note)
 
-        self.tabbar = Segmented(self.TABS, "general")
+        self.tabbar = Segmented(self.TABS, "general", small=True)
         self.pages = QStackedWidget()
         self.tabbar.changed.connect(lambda k: self.pages.setCurrentIndex(
             [t for t, _ in self.TABS].index(k)))
@@ -687,7 +688,6 @@ class SettingsPage(QWidget):
         w, lay = self._page()
         you = Card()
         you.add(_row("Name", self._edit("user_name", "your name", fallback="friend")))
-        you.add(_row("City", self._edit("city", "for the weather")))
         kuro = Card()
         self.size = Segmented([("small", "S"), ("medium", "M"), ("large", "L")],
                               self.s.chat_size, small=True)
@@ -697,7 +697,7 @@ class SettingsPage(QWidget):
         kuro.add(self._toggle("dnd_fullscreen", "Hide during fullscreen",
                               "Games and videos"))
         kuro.add(self._toggle("morning_briefing", "Daily briefing",
-                              "Weather, calendar and reminders"))
+                              "Weather (finds your city itself), calendar, reminders"))
         priv = Card()
         priv.add(self._toggle("learn_enabled", "Learn from our chats"))
         priv.add(self._toggle("aware", "Notice which app I'm in"))
@@ -712,7 +712,26 @@ class SettingsPage(QWidget):
     def _tab_ai(self) -> QWidget:
         w, lay = self._page()
         brain = Card()
-        self.key = self._edit("gemini_key", "paste key", 150, secret=True)
+        # brain picker: a 3x2 grid of pills, each with its price tag
+        grid_w = QWidget()
+        grid = QGridLayout(grid_w)
+        grid.setContentsMargins(0, 8, 0, 6)
+        grid.setSpacing(5)
+        self.brain_btns: dict[str, QPushButton] = {}
+        for i, name in enumerate(P.ORDER):
+            pre = P.PRESETS[name]
+            b = QPushButton(f"{pre['label']}\n{pre['tag']}")
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet("padding: 5px 4px; font-size: 8.5pt;")
+            b.clicked.connect(lambda _c=False, n=name: self._pick_brain(n))
+            self.brain_btns[name] = b
+            grid.addWidget(b, i // 3, i % 3)
+        brain.add(grid_w)
+
+        self.key = InlineEdit("", "paste key", 150, secret=True)
+        self.key.editingFinished.connect(self._key_edited)
         self.test_btn = QPushButton("Test")
         self.test_btn.setObjectName("seg")
         self.test_btn.clicked.connect(self._test)
@@ -722,13 +741,15 @@ class SettingsPage(QWidget):
         kr.setSpacing(6)
         kr.addWidget(self.key)
         kr.addWidget(self.test_btn)
-        brain.add(_row("Gemini key", keyrow))
-        self.result = QLabel(f'<a style="color:{LIME_HEX}; text-decoration:none" '
-                             f'href="https://aistudio.google.com/apikey">Get a free key ↗</a>')
+        self.key_row = _row("Key", keyrow)
+        self.key_label = self.key_row.findChildren(QLabel)[0]
+        brain.add(self.key_row)
+        self.result = QLabel("")
         self.result.setOpenExternalLinks(True)
         self.result.setWordWrap(True)
-        self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 0 0 8px 0;")
         brain.add(self.result)
+        self.model_edit = self._edit("model", "auto", 150)
+        brain.add(_row("Model", self.model_edit, "Auto picks the best one"))
         brain.add(_row("Translate into", self._edit("translate_to", "English", 110,
                                                    fallback="English")))
         voice = Card()
@@ -741,11 +762,54 @@ class SettingsPage(QWidget):
             chip.setStyleSheet(f"color: {DIM_HEX}; font-size: 8.5pt; background: #191a1f;"
                                " border-radius: 6px; padding: 3px 7px;")
             keys.add(_row(label, chip))
-        for title, card in (("AI", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
+        for title, card in (("BRAIN", brain), ("VOICE", voice), ("SHORTCUTS", keys)):
             lay.addWidget(_section(title))
             lay.addWidget(card)
         lay.addStretch()
+        self._show_brain()
         return w
+
+    def _show_brain(self, note: str = "") -> None:
+        """Reflect the chosen brain: pills, key row, and the hint/link line."""
+        name = self.s.provider if self.s.provider in P.PRESETS else "gemini"
+        pre = P.PRESETS[name]
+        for n, b in self.brain_btns.items():
+            b.setChecked(n == name)
+        self.key.setVisible(pre["needs_key"])
+        self.key_label.setText(f"{pre['label']} key" if pre["needs_key"] else pre["label"])
+        self.key.setText(self.s.key_for(name))
+        verb = "Get a free key" if pre["tag"] == "free" else \
+            "Get Ollama" if name == "ollama" else "Get a key"
+        self.result.setText(
+            f'{html.escape(note or pre["key_hint"])} · <a style="color:{LIME_HEX}; '
+            f'text-decoration:none" href="{pre["key_url"]}">{verb} ↗</a>')
+        self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 0 0 8px 0;")
+
+    def _pick_brain(self, name: str) -> None:
+        if name == self.s.provider:
+            self._show_brain()
+            return
+        self.model_edit.setText("")
+        self._loading = True              # one save for both changes
+        self.s.model = ""
+        self._loading = False
+        self._set("provider", name)
+        self._show_brain()
+
+    def _key_edited(self) -> None:
+        if self._loading:
+            return
+        key = self.key.text().strip()
+        if key == self.s.key_for():
+            return
+        self.s.set_key(self.s.provider, key)
+        try:
+            self.s.save()
+        except OSError:
+            return
+        self.saved_note.setText("Saved ✓")
+        self._note_timer.start(1400)
+        self.saved.emit()
 
     def _tab_focus(self) -> QWidget:
         w, lay = self._page()
@@ -811,7 +875,7 @@ class SettingsPage(QWidget):
     def reload(self) -> None:
         self._loading = True
         try:
-            for attr in ("user_name", "city", "gemini_key", "translate_to",
+            for attr in ("user_name", "translate_to", "model",
                          "google_client_id", "google_client_secret"):
                 getattr(self, f"edit_{attr}").setText(str(getattr(self.s, attr)))
             self.size.set_value(self.s.chat_size)
@@ -819,29 +883,35 @@ class SettingsPage(QWidget):
             self.break_len.set_value(str(self.s.break_minutes))
             for attr, tg in self.toggles.items():
                 tg.setChecked(bool(getattr(self.s, attr)))
+            self._show_brain()
         finally:
             self._loading = False
 
     def _test(self) -> None:
+        name = self.s.provider
+        pre = P.PRESETS[name]
         key = self.key.text().strip()
-        if not key:
-            self._show_result(False, "Paste a key first.")
+        if pre["needs_key"] and not key:
+            self._show_result(False, f"Paste your {pre['label']} key first.")
             return
-        self._set("gemini_key", key)
+        self._key_edited()
+        model = self.model_edit.text().strip()
         self.test_btn.setEnabled(False)
         self.result.setText("Testing…")
 
         def work():
             try:
-                model = self.tester(key)
-                self._tested.emit(True, f"Connected ✓  ({model})")
-            except Exception as e:     # show Google's own words
+                used = self.tester(name, key, model)
+                self._tested.emit(True, f"Connected ✓  ({used})")
+            except Exception as e:     # show the provider's own words
                 detail = getattr(e, "detail", "") or str(e)
                 kind = getattr(e, "kind", "")
-                hint = {"auth": "The key was rejected. Copy it again from AI Studio.",
-                        "connection": "Can't reach Google. Check the internet / firewall.",
-                        "rate": "Free limit reached for now. Try again in a minute.",
-                        "model_missing": "No free Gemini model is available to this key."
+                hint = {"auth": f"The key was rejected. Copy it again from {pre['label']}.",
+                        "connection": ("Ollama isn't running. Open the Ollama app." if
+                                       name == "ollama" else
+                                       f"Can't reach {pre['label']}. Check the internet."),
+                        "rate": "Limit reached for now. Try again in a minute.",
+                        "model_missing": f"No {pre['label']} model is available."
                         }.get(kind, "")
                 self._tested.emit(False, f"{hint}\n{detail[:220]}".strip())
         threading.Thread(target=work, daemon=True).start()
@@ -1054,7 +1124,7 @@ class ConfirmPage(QWidget):
 
 
 # ======================================================================= hud
-SIZES = {"chat": (340, 400), "settings": (370, 500),
+SIZES = {"chat": (340, 400), "settings": (390, 520),
          "confirm": (340, 230), "study": (360, 470)}
 CHAT_SIZES = {"small": (300, 330), "medium": (340, 400), "large": (420, 540)}
 
