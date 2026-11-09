@@ -42,7 +42,7 @@ def setup_logging() -> Path:
 @dataclass
 class Settings:
     cat_name: str = "Kuro"
-    user_name: str = "Drey"
+    user_name: str = "friend"         # asked in the first-run welcome
     personality: str = (
         "a cute, playful, slightly sassy black cat with small magical powers "
         "(you can walk on air and blink across the screen), who is secretly very "
@@ -53,6 +53,9 @@ class Settings:
     gemini_key: str = ""
     keys: dict = field(default_factory=dict)   # keys for the other brains
     model: str = ""                   # "" = automatic (best model the key can use)
+    auto_fallback: bool = True        # out of quota? use another brain you have a key for
+    cloud_url: str = ""               # Kuro Cloud (subscription server, see server/)
+    onboarded: bool = False           # finished the first-run welcome
     max_tokens: int = 1024
 
     # behaviour
@@ -161,6 +164,8 @@ def load_settings() -> Settings:
         s.gemini_key = ""
     if not isinstance(s.keys, dict):
         s.keys = {}
+    if not s.onboarded and cfg.exists() and s.ready:
+        s.onboarded = True                # set up before the welcome existed
     from .providers import PRESETS
     if s.provider not in PRESETS:
         s.provider = "gemini"

@@ -720,9 +720,10 @@ class SettingsPage(QWidget):
         grid.setContentsMargins(0, 8, 0, 6)
         grid.setSpacing(5)
         self.brain_btns: dict[str, QPushButton] = {}
-        for i, name in enumerate(P.ORDER):
+        names = P.ORDER + (["cloud"] if getattr(self.s, "cloud_url", "") else [])
+        for i, name in enumerate(names):
             pre = P.PRESETS[name]
-            b = QPushButton(f"{pre['label']}\n{pre['tag']}")
+            b = QPushButton(f"{pre['label']}\n{pre.get('badge') or pre['tag']}")
             b.setObjectName("seg")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
@@ -752,6 +753,9 @@ class SettingsPage(QWidget):
         brain.add(self.result)
         self.model_edit = self._edit("model", "auto", 150)
         brain.add(_row("Model", self.model_edit, "Auto picks the best one"))
+        brain.add(self._toggle("auto_fallback", "Backup brain",
+                               "Out of free uses? I switch to another brain you've added "
+                               "a key for. Tip: add Groq and Gemini both."))
         brain.add(_row("Translate into", self._edit("translate_to", "English", 110,
                                                    fallback="English")))
         voice = Card()
@@ -782,9 +786,9 @@ class SettingsPage(QWidget):
         self.key.setText(self.s.key_for(name))
         verb = "Get a free key" if pre["tag"] == "free" else \
             "Get Ollama" if name == "ollama" else "Get a key"
-        self.result.setText(
-            f'{html.escape(note or pre["key_hint"])} · <a style="color:{LIME_HEX}; '
-            f'text-decoration:none" href="{pre["key_url"]}">{verb} ↗</a>')
+        link = (f' · <a style="color:{LIME_HEX}; text-decoration:none" '
+                f'href="{pre["key_url"]}">{verb} ↗</a>') if pre["key_url"] else ""
+        self.result.setText(f'{html.escape(note or pre["key_hint"])}{link}')
         self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 0 0 8px 0;")
 
     def _pick_brain(self, name: str) -> None:
@@ -1125,9 +1129,198 @@ class ConfirmPage(QWidget):
         self.detail.setText(text)
 
 
+class WelcomePage(QWidget):
+    """First launch: Kuro says hi, learns your name and gets a brain in under
+    a minute. Groq is recommended: free, fast, and its free limits are far
+    bigger than Gemini's."""
+    step_changed = Signal(int)            # 0 hello, 1 name, 2 brain, 3 done (for his reactions)
+    finished = Signal()
+    other_brains = Signal()
+    _tested = Signal(bool, str)
+
+    def __init__(self, settings, tester):
+        super().__init__()
+        self.s, self.tester = settings, tester
+        self.steps = QStackedWidget()
+        self.steps.addWidget(self._hello())
+        self.steps.addWidget(self._name())
+        self.steps.addWidget(self._brain())
+        self.steps.addWidget(self._done())
+        self.dots = QLabel()
+        self.dots.setAlignment(Qt.AlignCenter)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 14)
+        lay.setSpacing(8)
+        lay.addWidget(self.steps, 1)
+        lay.addWidget(self.dots)
+        self._tested.connect(self._show_test)
+        self.go(0)
+
+    # ------------------------------------------------------------ pieces
+    @staticmethod
+    def _text(t: str, dim: bool = False, size: float = 9.5) -> QLabel:
+        lab = QLabel(t)
+        lab.setWordWrap(True)
+        lab.setTextFormat(Qt.RichText)
+        lab.setOpenExternalLinks(True)
+        lab.setStyleSheet(f"color: {DIM_HEX if dim else TEXT_HEX}; font-size: {size}pt;")
+        return lab
+
+    def _page(self, title: str, *widgets: QWidget, buttons: list[QWidget] = ()) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        t = QLabel(title)
+        t.setStyleSheet(f"color: {LIME_HEX}; font-size: 14pt; font-weight: 700;")
+        lay.addWidget(t)
+        for x in widgets:
+            lay.addWidget(x)
+        lay.addStretch()
+        row = QHBoxLayout()
+        row.addStretch()
+        for b in buttons:
+            row.addWidget(b)
+        lay.addLayout(row)
+        w.title_label = t
+        return w
+
+    @staticmethod
+    def _button(text: str, primary: bool = True) -> QPushButton:
+        b = QPushButton(text)
+        b.setObjectName("primary" if primary else "ghost")
+        b.setCursor(Qt.PointingHandCursor)
+        return b
+
+    def _hello(self) -> QWidget:
+        go = self._button("Let's go  →")
+        go.clicked.connect(lambda: self.go(1))
+        return self._page(
+            "Hi! I'm Kuro.",
+            self._text("A little black cat with small magical powers. I live on your desktop, "
+                       "chat with you, open apps, play music, keep you focused and remember "
+                       "what matters to you."),
+            self._text("Let's set me up. It takes about a minute.", dim=True),
+            buttons=[go])
+
+    def _name(self) -> QWidget:
+        self.name_edit = FocusLineEdit(self.s.user_name if self.s.user_name != "friend" else "")
+        self.name_edit.setPlaceholderText("your name")
+        self.name_edit.returnPressed.connect(self._save_name)
+        nxt = self._button("Next  →")
+        nxt.clicked.connect(self._save_name)
+        return self._page("What should I call you?", _field(self.name_edit),
+                          buttons=[nxt])
+
+    def _brain(self) -> QWidget:
+        get = self._button("Get my free Groq key  ↗", primary=False)
+        get.setObjectName("seg")
+        get.clicked.connect(lambda: __import__("webbrowser").open(P.PRESETS["groq"]["key_url"]))
+        self.key_edit = FocusLineEdit("")
+        self.key_edit.setPlaceholderText("paste the key here (starts with gsk_)")
+        self.key_edit.setEchoMode(QLineEdit.Password)
+        self.key_edit.returnPressed.connect(self._test)
+        self.test_note = self._text("", dim=True, size=8.5)
+        self.test_btn = self._button("Test && finish")
+        self.test_btn.clicked.connect(self._test)
+        other = self._button("Other brains…", primary=False)
+        other.clicked.connect(self.other_brains)
+        skip = self._button("Later", primary=False)
+        skip.clicked.connect(lambda: self.go(3))
+        return self._page(
+            "Give me a brain",
+            self._text("I think with <b>Groq</b>: free, very fast, and plenty of daily uses."),
+            self._text("1. Click the button and sign in (Google works).<br>"
+                       "2. Press <b>Create API Key</b>, then copy it.<br>"
+                       "3. Paste it below.", dim=True, size=8.8),
+            get, _field(self.key_edit), self.test_note,
+            buttons=[skip, other, self.test_btn])
+
+    def _done(self) -> QWidget:
+        start = self._button("Start  ✦")
+        start.clicked.connect(self._finish)
+        tips = self._text(
+            "• <b>Double-click</b> me to chat, <b>right-click</b> for my menu<br>"
+            "• <b>Ctrl+Alt+K</b> chat · <b>Ctrl+Alt+Space</b> talk<br>"
+            "• Try: <i>“open Spotify”</i>, <i>“focus for 25 minutes”</i>, "
+            "<i>“what's on my screen?”</i>", size=9)
+        self.done_note = self._text("", dim=True, size=8.5)
+        page = self._page("All set!", tips, self.done_note, buttons=[start])
+        self.done_title = page.title_label
+        return page
+
+    # ------------------------------------------------------------ flow
+    def go(self, i: int) -> None:
+        self.steps.setCurrentIndex(i)
+        self.dots.setText("  ".join(
+            f'<span style="color:{LIME_HEX if k == i else FAINT_HEX}">●</span>'
+            for k in range(4)))
+        if i == 1:
+            self.name_edit.setFocus()
+        elif i == 2:
+            self.key_edit.setFocus()
+        elif i == 3:
+            name = self.s.user_name or "friend"
+            self.done_title.setText(f"All set, {html.escape(name)}!")
+            self.done_note.setText("" if self.s.ready else
+                                   "I still need a brain to answer you: right-click me → "
+                                   "Settings → AI & Voice whenever you're ready.")
+        self.step_changed.emit(i)
+
+    def _save_name(self) -> None:
+        name = self.name_edit.text().strip()
+        if name:
+            self.s.user_name = name
+            self._save()
+        self.go(2)
+
+    def _test(self) -> None:
+        key = self.key_edit.text().strip()
+        if not key:
+            self._show_test(False, "Paste the key first.")
+            return
+        self.test_btn.setEnabled(False)
+        self.test_note.setText("Testing…")
+
+        def work():
+            try:
+                used = self.tester("groq", key, "")
+                self._tested.emit(True, used)
+            except Exception as e:
+                kind = getattr(e, "kind", "")
+                msg = {"auth": "That key didn't work. Copy it again from Groq.",
+                       "connection": "I can't reach Groq. Is the internet on?",
+                       "rate": "Groq is busy for a moment. Try again in a minute."
+                       }.get(kind, getattr(e, "detail", "") or str(e))
+                self._tested.emit(False, msg[:200])
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_test(self, ok: bool, text: str) -> None:
+        self.test_btn.setEnabled(True)
+        if ok:
+            self.s.set_key("groq", self.key_edit.text().strip())
+            self.s.provider, self.s.model = "groq", ""
+            self._save()
+            self.go(3)
+            return
+        self.test_note.setText(html.escape(text))
+        self.test_note.setStyleSheet(f"color: {theme.DANGER_HEX}; font-size: 8.5pt;")
+
+    def _finish(self) -> None:
+        self.s.onboarded = True
+        self._save()
+        self.finished.emit()
+
+    def _save(self) -> None:
+        try:
+            self.s.save()
+        except OSError:
+            pass
+
+
 # ======================================================================= hud
 SIZES = {"chat": (340, 400), "settings": (390, 520),
-         "confirm": (340, 230), "study": (360, 470)}
+         "confirm": (340, 230), "study": (360, 470), "welcome": (360, 340)}
 CHAT_SIZES = {"small": (300, 330), "medium": (340, 400), "large": (420, 540)}
 
 
@@ -1156,9 +1349,10 @@ class Hud(QWidget):
         self.settings = SettingsPage(settings, tester)
         self.confirm = ConfirmPage(settings.cat_name)
         self.study = StudyPage()
+        self.welcome = WelcomePage(settings, tester)
         self.stack = QStackedWidget(self)
         self.pages = {"bubble": self.bubble, "chat": self.chat, "settings": self.settings,
-                      "confirm": self.confirm, "study": self.study}
+                      "confirm": self.confirm, "study": self.study, "welcome": self.welcome}
         for w in self.pages.values():
             self.stack.addWidget(w)
         self.fade = QGraphicsOpacityEffect(self.stack)
@@ -1175,6 +1369,8 @@ class Hud(QWidget):
         self.settings.saved.connect(self._saved)
         self.study.back.connect(lambda: self.open("chat"))
         self.confirm.answered.connect(self._answer)
+        self.welcome.finished.connect(self.close_panel)
+        self.welcome.other_brains.connect(self._other_brains)
 
         # animation state
         self.w = Spring(40, 240, 0.72)
@@ -1192,7 +1388,7 @@ class Hud(QWidget):
 
     # ------------------------------------------------------------ public api
     def is_open(self) -> bool:
-        return self.page in ("chat", "settings", "confirm", "study")
+        return self.page in ("chat", "settings", "confirm", "study", "welcome")
 
     def say(self, text: str, seconds: float | None = None) -> None:
         """Show a line above Kuro. If a panel is open, it goes in the chat."""
@@ -1263,6 +1459,10 @@ class Hud(QWidget):
     def _bubble_done(self) -> None:
         if self.page == "bubble":
             self._show("", (40, 16))
+
+    def _other_brains(self) -> None:
+        self.open("settings")
+        self.settings.tabbar.set_value("ai", emit=True)
 
     def _saved(self) -> None:
         self.settings_saved.emit()        # auto-save: stay on the settings page

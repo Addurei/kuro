@@ -61,6 +61,7 @@ class Signals(QObject):
     briefing = Signal(str)
     google_status = Signal(bool, str)
     wake = Signal(str)
+    brain_switched = Signal(str, str)
 
 
 class _ConfirmJob:
@@ -115,7 +116,8 @@ class Controller(FeaturesMixin):
         self._init_features_model(d)
         self.brain = Brain(settings, self.tools, confirm=self._confirm_from_worker,
                            notify=self.sig.tool_used.emit, context=self._context,
-                           on_action=self.habits.record)
+                           on_action=self.habits.record,
+                           on_switch=self.sig.brain_switched.emit)
         self.brain.load(self.history_path)
         self.pending_suggestion = ""
         self._suggested: set[tuple[date, str]] = set()
@@ -127,7 +129,7 @@ class Controller(FeaturesMixin):
         self.cat = CatWidget(settings.scale, can_wander=self._can_wander)
         self.cat.typing_rate = lambda: (self.typing.rate() if self.s.aware
                                         and self.s.react_activity else 0.0)
-        self.hud = Hud(self.cat, settings, self.memory, test_key)
+        self.hud = Hud(self.cat, settings, self.memory, self._test_key)
         self.player = NowPlaying(self.cat, on_toggle=lambda: self._media("play_pause"),
                                  on_next=lambda: self._media("next"))
         for who, text in self.brain.visible_turns()[-12:]:
@@ -172,6 +174,7 @@ class Controller(FeaturesMixin):
         self.sig.scan_fx.connect(lambda on: self.cat.set_scanning(on))
         self.sig.hotkey_chat.connect(self.toggle_chat)
         self.sig.hotkey_voice.connect(self.start_listening)
+        self.sig.brain_switched.connect(self._brain_switched)
 
         self._init_features_view()
         self._tick = QTimer(timeout=self._heartbeat)
@@ -183,7 +186,10 @@ class Controller(FeaturesMixin):
 
         self.cat.show()
         self.hud.chat.set_status("online" if settings.ready else "offline")
-        QTimer.singleShot(600, self._greet)
+        if settings.onboarded:
+            QTimer.singleShot(600, self._greet)
+        else:
+            QTimer.singleShot(900, self._welcome)
         # find the city quietly in the background (for weather), nothing to type
         threading.Thread(target=self._locate, daemon=True, name="locate").start()
 
@@ -237,6 +243,15 @@ class Controller(FeaturesMixin):
         self.hud.chat.add("cat", text)
         self.say(text)
         self._resume_wake(2 + len(text) / 14)
+
+    def _test_key(self, provider: str, key: str, model: str = "") -> str:
+        base = self.s.cloud_url if provider == "cloud" else ""
+        return providers.make(provider, key, model, base=base).test()
+
+    def _brain_switched(self, frm: str, to: str) -> None:
+        log.info("brain switched %s -> %s", frm, to)
+        self.hud.chat.add("cat", f"({frm} is out of breath, so {to} is thinking for me now.)",
+                          animate=False)
 
     def _on_learned(self, facts: list) -> None:
         log.info("learned: %s", facts)        # quietly; see Memory to review
@@ -563,6 +578,33 @@ class Controller(FeaturesMixin):
             self.cat.set_state("happy")
             self.cat.hop(150)
             QTimer.singleShot(1200, self._settle)
+
+    def _welcome(self) -> None:
+        """First launch: a sparkly entrance, then the welcome steps."""
+        self.hud.welcome.step_changed.connect(self._welcome_step)
+        self.hud.welcome.finished.connect(self._welcome_done)
+        self.cat._burst(24)
+        self.cat.hop(200)
+        self.cat.react("love", 1.6)
+        self.hud.open("welcome")
+
+    def _welcome_step(self, i: int) -> None:
+        if i == 1:
+            self.cat.react("surprised", 0.8)
+            self.cat.hop(140)
+        elif i == 2:
+            self.cat.set_state("thinking")
+            QTimer.singleShot(1800, self._settle)
+        elif i == 3:
+            self.brain.refresh_provider()
+            self.hud.chat.set_status("online" if self.s.ready else "offline")
+            self.cat.react("love", 2.5)
+            self.cat._burst(36)
+            self.cat.hop(220)
+
+    def _welcome_done(self) -> None:
+        self.cat.set_state("happy")
+        QTimer.singleShot(1500, self._settle)
 
     def _greet(self) -> None:
         """No spoken hello on startup. Only a silent setup hint when he has

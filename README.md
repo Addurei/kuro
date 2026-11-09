@@ -6,8 +6,8 @@ A little black cat with small magical powers who lives on your Windows desktop, 
 
 1. Install **Python 3.12** (python.org, tick "Add python.exe to PATH").
 2. Double-click **`setup.bat`** once.
-3. Double-click **`run.bat`** → right-click Kuro → ⚙ Settings → **AI & Voice**.
-4. Pick a brain, paste its key (the "Get a key ↗" link takes you there) and press **Test**. Changes save by themselves.
+3. Double-click **`run.bat`**. On first launch Kuro introduces himself, asks your name and sets up his brain with you (Groq: free, fast, generous limits) in about a minute.
+4. Other brains any time: right-click Kuro → ⚙ Settings → **AI & Voice**.
 
 | Brain | Cost | Notes |
 |---|---|---|
@@ -18,6 +18,8 @@ A little black cat with small magical powers who lives on your Windows desktop, 
 | OpenAI / Claude | paid key | Strongest; both can see images |
 
 Kuro picks the best model each key can use; type one in Settings → Model to override it.
+
+**Backup brain:** add keys for more than one brain (e.g. Groq *and* Gemini). When one runs out of free uses or can't be reached, Kuro switches to the next by himself, notes it in the chat, and lets the tired one rest for 15 minutes. (Settings → AI & Voice → Backup brain.)
 If Test fails, it shows the provider's exact reason (bad key, no internet, limit reached…). Errors are also logged to `%APPDATA%\Kuro\kuro.log`.
 
 ## Using him
@@ -93,7 +95,7 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
 ## Tests
 
-`python -m pytest` runs the test suite (149 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
+`python -m pytest` runs the test suite (159 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
 
 ## Known limits
 
@@ -105,6 +107,14 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 ## Before selling Kuro
 
 Never ship your own API key inside the app; anyone can extract it. Either users paste their own free key (how it works now), or you run a small server that holds the key and checks subscriptions. Also: write a short privacy policy, since he reads files and remembers personal facts. A code-signing certificate avoids Windows SmartScreen warnings. Check Google's Gemini API terms for commercial use.
+
+## Crash safety
+
+`main.py` runs Kuro under a tiny supervisor. If he crashes, the error (with every thread's stack, even for native crashes) goes to `%APPDATA%\Kuro\crash.log` and he restarts within two seconds ("Oops, I tripped over something. I'm back!"). Errors inside buttons or timers are logged without taking him down. After 4 crashes in 2 minutes he stops and shows where the log is, instead of looping.
+
+## Kuro Cloud (selling a subscription)
+
+`server/kuro_cloud.py` is a small relay you host: buyers get a license key, the relay checks it (exists, not expired, under its daily limit) and forwards their requests to Groq / Gemini with **your** key, falling back to the next upstream if one is out of quota. Your key never leaves the server. See the top of that file for running it and making licenses; buyers set `"cloud_url"` in config.json and pick **Kuro Cloud** in Settings.
 
 ## Size and speed
 

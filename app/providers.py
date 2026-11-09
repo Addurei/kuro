@@ -305,11 +305,11 @@ class GeminiProvider:
 PRESETS: dict[str, dict] = {
     "gemini": {"label": "Gemini", "tag": "free", "needs_key": True,
                "key_url": "https://aistudio.google.com/apikey",
-               "key_hint": "Free key from Google AI Studio"},
-    "groq": {"label": "Groq", "tag": "free", "needs_key": True,
+               "key_hint": "Free key from Google AI Studio (small daily limit)"},
+    "groq": {"label": "Groq", "tag": "free", "badge": "★ best free", "needs_key": True,
              "base": "https://api.groq.com/openai/v1",
              "key_url": "https://console.groq.com/keys",
-             "key_hint": "Free key, very fast replies",
+             "key_hint": "Free key, very fast, generous daily limits",
              "prefer": ["openai/gpt-oss-120b", "llama-3.3-70b", "kimi-k2", "qwen3-32b",
                         "llama-4", "gpt-oss-20b"],
              "light": ["llama-3.1-8b-instant", "gpt-oss-20b", "llama-3.3-70b"],
@@ -335,11 +335,17 @@ PRESETS: dict[str, dict] = {
                "skip": ["audio", "realtime", "tts", "transcribe", "image", "embedding",
                         "search", "moderation", "dall", "whisper", "codex", "instruct"],
                "openai_params": True},
+    "cloud": {"label": "Kuro Cloud", "tag": "subscription", "needs_key": True,
+              "base": "", "key_url": "", "key_hint": "Your Kuro license key",
+              "prefer": []},
     "claude": {"label": "Claude", "tag": "paid", "needs_key": True,
                "key_url": "https://console.anthropic.com/settings/keys",
                "key_hint": "Paid key from Anthropic"},
 }
-ORDER = ["gemini", "groq", "openrouter", "ollama", "openai", "claude"]
+ORDER = ["groq", "gemini", "openrouter", "ollama", "openai", "claude"]
+RECOMMENDED = "groq"          # free, fast, and far more generous limits than Gemini's free tier
+# when the chosen brain is out of quota / unreachable, try these (if they have keys)
+FALLBACK_ORDER = ["groq", "gemini", "openrouter", "openai", "claude"]
 
 
 def label(name: str) -> str:
@@ -489,11 +495,12 @@ def from_openai(data: dict) -> Reply:
 
 
 class OpenAIProvider(_Base):
-    def __init__(self, name: str, api_key: str = "", model: str = "", timeout: float = 90.0):
+    def __init__(self, name: str, api_key: str = "", model: str = "", timeout: float = 90.0,
+                 base: str = ""):
         self.name = name
         self.p = PRESETS[name]
         self.label = self.p["label"]
-        self.base = self.p["base"]
+        self.base = (base or self.p["base"]).rstrip("/")
         self.api_key = (api_key or "").strip()
         self.timeout = timeout
         self.fixed = model.strip()
@@ -696,15 +703,98 @@ class ClaudeProvider(_Base):
             {"type": "text", "text": prompt}]}]}))
 
 
+# ===================================================================== fallback
+class FallbackProvider:
+    """The chosen brain first; when it's out of quota, overloaded or can't be
+    reached, the next brain you have a key for answers instead, so Kuro never
+    just stops. A brain that ran out rests for a while before it's tried again."""
+
+    REST = {"rate": 15 * 60, "model_missing": 30 * 60, "connection": 60}
+
+    def __init__(self, chain: list, on_switch=None):
+        self.chain = chain                          # providers, chosen one first
+        self.on_switch = on_switch or (lambda _frm, _to: None)
+        self._rest_until: dict[str, float] = {}
+        self.active = chain[0]
+
+    @property
+    def name(self) -> str:
+        return self.active.name
+
+    @property
+    def label(self) -> str:
+        return self.active.label
+
+    @property
+    def model(self) -> str:
+        return self.active.model
+
+    def _order(self) -> list:
+        import time as _t
+        now = _t.monotonic()
+        awake = [p for p in self.chain if self._rest_until.get(p.name, 0) <= now]
+        return awake or list(self.chain)             # all resting: try anyway
+
+    def _run(self, method: str, *args, **kwargs):
+        import time as _t
+        last: ProviderError | None = None
+        for p in self._order():
+            try:
+                out = getattr(p, method)(*args, **kwargs)
+            except ProviderError as e:
+                if e.kind not in self.REST:
+                    raise                            # a bad key etc.: say so, don't hide it
+                self._rest_until[p.name] = _t.monotonic() + self.REST[e.kind]
+                log.info("brain %s unavailable (%s); trying the next one", p.name, e.kind)
+                last = e
+                continue
+            if p is not self.active:
+                prev, self.active = self.active, p
+                try:
+                    self.on_switch(prev.label, p.label)
+                except Exception:
+                    pass
+            return out
+        raise last  # type: ignore[misc]
+
+    def chat(self, *a, **k):
+        return self._run("chat", *a, **k)
+
+    def complete(self, *a, **k):
+        return self._run("complete", *a, **k)
+
+    def vision(self, *a, **k):
+        return self._run("vision", *a, **k)
+
+    def web_answer(self, *a, **k):
+        return self._run("web_answer", *a, **k)
+
+    def test(self) -> str:
+        return self.chain[0].test()
+
+
 # ===================================================================== factory
-def make(name: str, key: str = "", model: str = ""):
+def make(name: str, key: str = "", model: str = "", base: str = ""):
     name = name if name in PRESETS else "gemini"
     if name == "gemini":
         return GeminiProvider(key, model)
     if name == "claude":
         return ClaudeProvider(key, model)
-    return OpenAIProvider(name, key, model)
+    return OpenAIProvider(name, key, model, base=base)
 
 
-def make_provider(settings):
-    return make(settings.provider, settings.key_for(), settings.model)
+def backups(settings) -> list[str]:
+    """Other brains Kuro can fall back to: ones you've added a key for."""
+    if not getattr(settings, "auto_fallback", True):
+        return []
+    return [n for n in FALLBACK_ORDER
+            if n != settings.provider and settings.key_for(n).strip()]
+
+
+def make_provider(settings, on_switch=None):
+    base = getattr(settings, "cloud_url", "") if settings.provider == "cloud" else ""
+    first = make(settings.provider, settings.key_for(), settings.model, base=base)
+    rest = [make(n, settings.key_for(n)) for n in backups(settings)]
+    if not rest:
+        return first
+    return FallbackProvider([first] + rest, on_switch)

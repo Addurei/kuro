@@ -32,7 +32,7 @@ def test_persona_forbids_actions():
 
 # ------------------------------------------------------------ brains
 def test_every_brain_is_offered_and_buildable():
-    assert P.ORDER == ["gemini", "groq", "openrouter", "ollama", "openai", "claude"]
+    assert P.ORDER == ["groq", "gemini", "openrouter", "ollama", "openai", "claude"]
     assert isinstance(P.make("gemini", "k"), P.GeminiProvider)
     assert isinstance(P.make("claude", "k"), P.ClaudeProvider)
     for n in ("groq", "openrouter", "ollama", "openai"):
@@ -195,3 +195,65 @@ def test_location_cached_and_weather_sentence(monkeypatch, tmp_path):
                              "daily": {"temperature_2m_max": [33.1], "temperature_2m_min": [25.9],
                                        "precipitation_probability_max": [40]}})
     assert txt == "31°C and partly cloudy, high 33°, low 26°, 40% chance of rain"
+
+
+# ------------------------------------------------------------ backup brain
+def test_out_of_quota_falls_back_and_rests_the_tired_brain():
+    switched = []
+
+    class Fake:
+        def __init__(self, name, fail=None):
+            self.name, self.label, self.model, self.fail, self.calls = name, name.title(), "m", fail, 0
+
+        def complete(self, prompt, **k):
+            self.calls += 1
+            if self.fail:
+                raise P.ProviderError(self.fail, "x", "quota")
+            return f"{self.name}: ok"
+
+    gem, groq = Fake("gemini", "rate"), Fake("groq")
+    fb = P.FallbackProvider([gem, groq], on_switch=lambda a, b: switched.append((a, b)))
+    assert fb.complete("hi") == "groq: ok" and switched == [("Gemini", "Groq")]
+    assert fb.complete("again") == "groq: ok" and gem.calls == 1      # Gemini rests
+    assert fb.label == "Groq"
+
+
+def test_bad_key_is_not_hidden_by_fallback():
+    class Bad:
+        name = label = "x"
+        model = "m"
+
+        def complete(self, *a, **k):
+            raise P.ProviderError("auth", "bad key")
+    with pytest.raises(P.ProviderError):
+        P.FallbackProvider([Bad(), Bad()]).complete("hi")
+
+
+def test_backups_only_brains_with_keys():
+    s = Settings(provider="gemini", gemini_key="AIza", keys={"groq": "gsk", "openai": ""})
+    assert P.backups(s) == ["groq"]
+    assert isinstance(P.make_provider(s), P.FallbackProvider)
+    s.auto_fallback = False
+    assert isinstance(P.make_provider(s), P.GeminiProvider)
+
+
+def test_rate_limit_without_backup_suggests_groq():
+    from app.brain import Brain
+    s = Settings(provider="gemini", gemini_key="k")
+
+    class Tired:
+        def chat(self, *a):
+            raise P.ProviderError("rate", "quota")
+    reply = Brain(s, {}, lambda t, a: True, provider=Tired()).ask("hi")
+    assert "Groq" in reply and "Settings" in reply
+
+
+def test_existing_setups_skip_the_welcome(tmp_path, monkeypatch):
+    import json
+    from app.config import load_settings
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert load_settings().onboarded is False                       # brand new
+    (tmp_path / "Kuro").mkdir(exist_ok=True)
+    (tmp_path / "Kuro" / "config.json").write_text(json.dumps({"gemini_key": "AIza"}))
+    assert load_settings().onboarded is True                        # already set up

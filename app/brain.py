@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config import Settings
-from .providers import GeminiProvider, ProviderError, label, make_provider
+from .providers import GeminiProvider, ProviderError, backups, label, make_provider
 from .tools import Tool, run_tool
 
 MAX_TOOL_ROUNDS = 8
@@ -111,13 +111,15 @@ class Brain:
                  confirm: Confirm, notify: Notify | None = None,
                  provider: GeminiProvider | None = None,
                  context: Callable[[], str] | None = None,
-                 on_action: OnAction | None = None):
+                 on_action: OnAction | None = None,
+                 on_switch: Callable[[str, str], None] | None = None):
         self.s = settings
         self.tools = tools
         self.confirm = confirm
         self.notify = notify or (lambda _msg: None)
         self.context = context or (lambda: context_prompt(settings))
         self.on_action = on_action or (lambda _n, _a: None)
+        self.on_switch = on_switch
         self.history: list[dict] = []
         self._provider = provider  # injectable for tests
 
@@ -126,7 +128,7 @@ class Brain:
         if self._provider is None:
             if not self.s.ready:
                 raise RuntimeError("no API key")
-            self._provider = make_provider(self.s)
+            self._provider = make_provider(self.s, self.on_switch)
         return self._provider
 
     def refresh_provider(self) -> None:
@@ -253,7 +255,11 @@ class Brain:
         if e.kind == "auth":
             return f"{who} rejected my key. Could you check it in Settings? The Test button there tells you why."
         if e.kind == "rate":
-            return f"I've hit {who}'s limit for a moment. Give me a minute and ask again."
+            if not backups(self.s):
+                other = "Gemini" if self.s.provider == "groq" else "Groq"
+                return (f"I've hit {who}'s free limit for now. Add a free {other} key in "
+                        "Settings → AI & Voice and I'll switch to it by myself next time.")
+            return "All my brains are tired right now. Give me a minute and ask again."
         if e.kind == "connection":
             if self.s.provider == "ollama":
                 return "I can't reach Ollama. Is the Ollama app running?"
