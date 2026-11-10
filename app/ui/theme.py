@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen)
+from PySide6.QtGui import (QBrush, QRadialGradient, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen)
 
 LIME = QColor(186, 226, 92)
 RED = QColor(255, 93, 108)
@@ -52,23 +52,33 @@ def with_alpha(c: QColor, a: float) -> QColor:
 
 # ------------------------------------------------------------------ panel
 def paint_matte(p: QPainter, path: QPainterPath) -> None:
-    """Matte black slab: deep gradient, soft top sheen, hairline edge."""
+    """A smoked-glass slab: a cool deep gradient, a faint lime glow bleeding in
+    from the top-left, a lit top edge and a hairline that fades as it goes
+    down. Reads as one premium object rather than a flat black box."""
     p.save()
     p.setRenderHint(QPainter.Antialiasing)
     r = path.boundingRect()
     g = QLinearGradient(r.topLeft(), r.bottomLeft())
-    g.setColorAt(0.0, QColor(21, 21, 24, 248))
-    g.setColorAt(0.4, QColor(12, 12, 14, 248))
-    g.setColorAt(1.0, QColor(8, 8, 10, 250))
+    g.setColorAt(0.0, QColor(24, 25, 30, 250))
+    g.setColorAt(0.35, QColor(15, 16, 19, 250))
+    g.setColorAt(1.0, QColor(9, 9, 11, 252))
     p.fillPath(path, g)
     p.setClipPath(path)
-    sheen = QLinearGradient(r.topLeft(), QPointF(r.left(), r.top() + 60))
-    sheen.setColorAt(0, QColor(255, 255, 255, 12))
+    glow = QRadialGradient(QPointF(r.left() + r.width() * 0.12, r.top()), max(120.0, r.width() * 0.8))
+    glow.setColorAt(0.0, QColor(186, 226, 92, 16))
+    glow.setColorAt(1.0, QColor(186, 226, 92, 0))
+    p.fillRect(r, glow)
+    sheen = QLinearGradient(r.topLeft(), QPointF(r.left(), r.top() + 70))
+    sheen.setColorAt(0, QColor(255, 255, 255, 14))
     sheen.setColorAt(1, QColor(255, 255, 255, 0))
-    p.fillRect(QRectF(r.left(), r.top(), r.width(), 60), sheen)
+    p.fillRect(QRectF(r.left(), r.top(), r.width(), 70), sheen)
     p.setClipping(False)
+    edge = QLinearGradient(r.topLeft(), r.bottomLeft())
+    edge.setColorAt(0.0, QColor(255, 255, 255, 46))
+    edge.setColorAt(0.25, QColor(255, 255, 255, 16))
+    edge.setColorAt(1.0, QColor(255, 255, 255, 8))
     p.setBrush(Qt.NoBrush)
-    p.setPen(QPen(QColor(255, 255, 255, 18), 1))
+    p.setPen(QPen(QBrush(edge), 1))
     p.drawPath(path)
     p.restore()
 
@@ -146,19 +156,22 @@ QLabel {{ background: transparent; }}
 QTextBrowser {{ background: transparent; border: none; }}
 QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 5px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #26282d; border-radius: 2px; min-height: 30px; }}
+QScrollBar::handle:vertical {{ background: #2a2c33; border-radius: 2px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: {LIME_HEX}; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page,
 QScrollBar::sub-page {{ height: 0; background: none; }}
 QLineEdit {{ background: transparent; border: none; padding: 6px 2px;
              selection-background-color: {LIME_HEX}; selection-color: #0a0a0b; }}
-QFrame#field {{ background: #0d0d10; border: 1px solid #1d1f24; border-radius: 12px; }}
-QFrame#field[focus="true"] {{ border-color: {LIME_HEX}; }}
-QPushButton {{ background: #15161a; border: 1px solid #24262c; border-radius: 10px;
+QFrame#field {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #0b0b0e, stop:1 #111216);
+                border: 1px solid #23252c; border-top-color: #1a1b20; border-radius: 13px; }}
+QFrame#field[focus="true"] {{ border-color: rgba(186, 226, 92, 0.65); }}
+QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1c1d22, stop:1 #141519);
+               border: 1px solid #26282e; border-top-color: #31333a; border-radius: 10px;
                padding: 7px 16px; font-family: {MONO_CSS}; font-size: 8.5pt; }}
 QPushButton:hover {{ border-color: #3a3d45; background: #1b1c20; }}
-QPushButton#primary {{ background: {LIME_HEX}; color: #0a0a0b; border: none; font-weight: 700; }}
-QPushButton#primary:hover {{ background: #cdf07a; }}
+QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d2f27f, stop:1 #a8d24a);
+                       color: #0a0a0b; border: none; font-weight: 700; }}
+QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ddf796, stop:1 #b6dc5a); }}
 QPushButton#danger {{ background: transparent; color: {DANGER_HEX};
                       border: 1px solid {DANGER_HEX}; font-weight: 700; }}
 QPushButton#danger:hover {{ background: rgba(255, 93, 108, 0.12); }}
@@ -167,10 +180,11 @@ QPushButton#dangerlink {{ background: transparent; border: none; color: {DANGER_
                           padding: 4px 2px; font-family: {SANS_CSS}; font-size: 8.5pt; }}
 QPushButton#dangerlink:hover {{ text-decoration: underline; }}
 QPushButton#ghost:hover {{ color: {TEXT_HEX}; }}
-QPushButton#seg {{ background: #111216; border: 1px solid #202228; border-radius: 9px;
+QPushButton#seg {{ background: #101115; border: 1px solid #1f2127; border-radius: 9px;
                    padding: 5px 9px; color: {DIM_HEX}; font-family: {SANS_CSS}; font-size: 8.5pt; }}
 QPushButton#seg:hover {{ color: {TEXT_HEX}; }}
-QPushButton#seg:checked {{ background: #1a1d10; border-color: {LIME_HEX}; color: {LIME_HEX}; }}
+QPushButton#seg:checked {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #232a14, stop:1 #191d10);
+                           border-color: rgba(186, 226, 92, 0.7); color: {LIME_HEX}; }}
 QPushButton#option {{ background: #111216; border: 1px solid #202228; border-radius: 10px;
                       padding: 8px 12px; text-align: left; font-family: {SANS_CSS};
                       font-size: 9pt; color: {TEXT_HEX}; }}

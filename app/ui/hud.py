@@ -402,10 +402,13 @@ class TypingDots(QWidget):
 
 
 BUBBLE_CSS = {
-    "cat": ("QLabel { background: #141519; border: 1px solid #1e2025; color: %s;"
-            " border-radius: 14px; border-bottom-left-radius: 5px; padding: 8px 12px; }" % TEXT_HEX),
-    "you": ("QLabel { background: #232832; color: #eef0f3;"
-            " border-radius: 14px; border-bottom-right-radius: 5px; padding: 8px 12px; }"),
+    "cat": ("QLabel { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1d1e24, stop:1 #16171b);"
+            " border: 1px solid rgba(255,255,255,0.06); border-top-color: rgba(255,255,255,0.1);"
+            " color: %s; border-radius: 15px; border-bottom-left-radius: 5px; padding: 9px 13px; }"
+            % TEXT_HEX),
+    "you": ("QLabel { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d0f07c, stop:1 #aad44c);"
+            " color: #101208; border-radius: 15px; border-bottom-right-radius: 5px;"
+            " padding: 9px 13px; }"),
 }
 
 
@@ -433,7 +436,7 @@ class Message(QWidget):
             self.label.setStyleSheet(BUBBLE_CSS[who])
             self.label.setMaximumWidth(max_width)
             fm = self.label.fontMetrics()           # size for the whole reply up front
-            self.label.setMinimumWidth(min(max_width, fm.horizontalAdvance(full_text or text) + 30))
+            self.label.setMinimumWidth(min(max_width, fm.horizontalAdvance(full_text or text) + 36))
             if who == "you":
                 lay.addStretch(1)
             lay.addWidget(self.label)
@@ -789,8 +792,11 @@ class Card(QFrame):
     def __init__(self, title: str = ""):
         super().__init__()
         self.setObjectName("card")
-        self.setStyleSheet("QFrame#card { background: #121317; border: 1px solid #1d1f24;"
-                           " border-radius: 12px; }")
+        self.setStyleSheet(
+            "QFrame#card { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            " stop:0 rgba(255,255,255,0.045), stop:1 rgba(255,255,255,0.018));"
+            " border: 1px solid rgba(255,255,255,0.055); border-top-color: rgba(255,255,255,0.09);"
+            " border-radius: 14px; }")
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 4, 12, 4)
         self._lay.setSpacing(0)
@@ -801,7 +807,7 @@ class Card(QFrame):
         if self._rows:
             line = QFrame()
             line.setFixedHeight(1)
-            line.setStyleSheet("background: #1b1c21; border: none;")
+            line.setStyleSheet("background: rgba(255,255,255,0.05); border: none;")
             self._lay.addWidget(line)
             w._divider = line                  # hidden together with its row
         self._lay.addWidget(w)
@@ -810,8 +816,12 @@ class Card(QFrame):
 
 
 def _section(title: str) -> QLabel:
-    lab = QLabel(title)
-    lab.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px 4px 4px;")
+    lab = QLabel(title.upper())
+    f = theme.sans(7.6)
+    f.setWeight(QFont.DemiBold)
+    f.setLetterSpacing(QFont.PercentageSpacing, 112)
+    lab.setFont(f)
+    lab.setStyleSheet("color: #6c707a; padding: 10px 4px 5px 6px;")
     return lab
 
 

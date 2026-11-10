@@ -36,7 +36,6 @@ SHADE = QColor(16, 16, 21)
 DEEP = QColor(3, 3, 5)
 RIM_COOL = QColor(126, 142, 200)       # the rim light
 RIM_FUR = QColor(92, 104, 150)         # black fur where that rim light grazes it
-RIM_LIMB = QColor(60, 68, 100)         # the same, fainter, on his legs
 LIGHT_DIR = (-0.42, -0.52)             # toward the key light (screen space)
 RIM = QColor(255, 255, 255, 36)        # faint outline so he reads on dark wallpapers
 INNER_EAR = QColor(238, 238, 242)
@@ -267,6 +266,8 @@ def _ear_path(m: float, mf: float, mp: float, yk: float, outer: bool) -> QPainte
     path.closeSubpath()
     return path
 EAR_PHI, EAR_LAM = 55.0, 37.7
+MAX_TURN = 18.0                         # degrees his body may turn from facing you
+MAX_HEAD_TURN = 26.0                    # ...and his head
 EYE_PHI, EYE_LAM = 28.0, -12.0          # big eyes, set a little below the middle
 EYE_FRONT = math.cos(math.radians(EYE_LAM)) * math.cos(math.radians(EYE_PHI))
 EAR_SINK = HEAD_H * math.sqrt(1 - (30 / HEAD_W) ** 2) - 22
@@ -278,8 +279,10 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
              geo: dict | None = None) -> tuple[list[Paw], QPointF]:
     """Paint Kuro. Returns his paws and the top of his head, in widget
     coordinates (for paw prints and for pinning the HUD above him)."""
-    yaw = math.radians(max(-88.0, min(88.0, pose.yaw)))
-    psi = math.radians(max(-88.0, min(88.0, pose.yaw + pose.head_yaw)))
+    # he always faces you: a gentle three-quarter turn at most, never side-on
+    yaw = math.radians(max(-MAX_TURN, min(MAX_TURN, pose.yaw * MAX_TURN / 88.0)))
+    psi = math.radians(max(-MAX_HEAD_TURN, min(MAX_HEAD_TURN,
+                                                 (pose.yaw + pose.head_yaw) * MAX_HEAD_TURN / 88.0)))
     st, sleep, b = pose.stand, pose.sleep, pose.breath
     run = pose.run * pose.gait
     phase = pose.gait_phase
@@ -382,15 +385,27 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
         _ellipse(torso, x, y, math.hypot(w * cyaw, r * sy) * (1 + 0.07 * jig), r)
         _ellipse(torso_o, x, y, math.hypot(w * cyaw, r * sy) * (1 + 0.07 * jig) + 1.0, r + 1.0)
     body_depth = project((hf + cf) / 2, 0, yaw)[1]
+    # with his legs tucked away he sits like a plush toy: the body widens into
+    # a soft round base that rests on the floor (bobbing a touch as he walks)
+    bob = abs(math.sin(phase * 2 * math.pi)) * 2.2 * pose.gait
+    bx_, _ = project((hf + cf) / 2, 0, yaw)
+    mid_y = (hy + cy) / 2
+    puff = (1 + 0.06 * jig) * (1 - 0.03 * sleep)
+    # a pear: narrow under his chin, round and wide at the bottom
+    for i in range(7):
+        u = i / 6
+        y = lerp(mid_y - 6, -17.0 - bob, u)
+        w = lerp(15.0, 27.5, math.sin(u * math.pi / 2)) * puff
+        h = lerp(14.0, 17.5, u)
+        _ellipse(torso, bx_, y, w, h)
+        _ellipse(torso_o, bx_, y, w + 1.0, h + 1.0)
 
     # ---- legs (IK) -----------------------------------------------------
     gp = _gait_params(pose.run)
     legs = []
     groom_paw = None              # a paw raised to his face is drawn in front of it
     groom_at = (0.0, 0.0)
-    contours = []                 # (centre, radius, start_deg, span_deg) for near haunch/shoulder
     paws: list[Paw] = []
-    toes: list[tuple[float, float, float]] = []
     for front in (1, 0):
         for side in (-1, 1):
             if front:
@@ -460,17 +475,7 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
             else:
                 rx0, _ = project(root_f, s_off, yaw)
                 legs.append((near, shape, (rx0, root_y, px, tgt[1])))
-            if near and sy > 0.45 and st > 0.3:
-                rx_, _ = project(root_f, s_off, yaw)
-                if front:                               # shoulder / elbow line
-                    contours.append((QPointF(rx_ - 2 * math.copysign(1, math.sin(yaw)), root_y + 2),
-                                     7.0, -75, 120))
-                else:                                   # front edge of the round haunch
-                    contours.append((QPointF(rx_ - 3 * math.copysign(1, math.sin(yaw)), root_y),
-                                     11.0, -80, 150))
             paws.append(Paw(QPointF(px, tgt[1] + 2.5), planted and pose.gait > 0.2, near))
-            if front and near and cyaw > 0.5:        # facing you: little toes on his front paws
-                toes.append((px, tgt[1] + 0.2, math.hypot(8.0 * sy, 6.8 * cyaw)))
 
     # ---- tail: tapered, curling, travelling wave
     tb_f = hf - rh * 0.85
@@ -657,8 +662,6 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     # ---- paint, back to front. Every part is shaded as its own rounded form
     # and drops a soft shadow on whatever is behind it, so he reads as a little
     # solid figure instead of one flat black cut-out.
-    far_legs = [(s_, at) for nr, s_, at in legs if not nr]
-    near_legs = [(s_, at) for nr, s_, at in legs if nr]
     hc0 = head_tf.map(QPointF(0, 0))
     bx0, _ = project((hf + cf) / 2, 0, yaw)
     body_c = QPointF(bx0, (hy + cy) / 2 - 2)
@@ -669,31 +672,6 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.drawPath(tail_o)
     p.drawPath(torso_o)
     p.drawPath(head_o)
-
-    def leg_form(shape, lift_):
-        """A limb as a soft cylinder: lit on the side facing the lamp, falling
-        to black across its width, a little darker toward the floor."""
-        box = shape.boundingRect()
-        g = QLinearGradient(QPointF(box.left() - 1, box.top()),
-                            QPointF(box.right() + 1, box.top() + box.width() * 0.5))
-        def mix(c, k):
-            return QColor(int(SHADE.red() + (c.red() - SHADE.red()) * k),
-                          int(SHADE.green() + (c.green() - SHADE.green()) * k),
-                          int(SHADE.blue() + (c.blue() - SHADE.blue()) * k))
-        g.setColorAt(0.0, mix(MID, lift_))
-        g.setColorAt(0.22, mix(LIT, lift_ * 0.8))
-        g.setColorAt(0.5, mix(MID, lift_))
-        g.setColorAt(0.8, SHADE)
-        g.setColorAt(1.0, DEEP)
-        return g
-
-    def cast(shape, strength=1.0):
-        """The soft shadow a part throws down and away from the light, on
-        whatever is behind it (three offset copies = a soft edge)."""
-        p.setCompositionMode(QPainter.CompositionMode_SourceAtop)   # only lands on him
-        p.setBrush(QColor(0, 0, 0, int(84 * strength)))
-        p.drawPath(shape.translated(1.1, 2.0))
-        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
     # each paw presses a small dark contact shadow into the floor
     if ground > 0.02:
@@ -709,9 +687,8 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
                 p.drawEllipse(QPointF(0, 0), 9.0, 9.0)
                 p.restore()
 
-    for shape, at in far_legs:                    # far legs sit in the body's shadow
-        p.setBrush(leg_form(shape, 0.25))
-        p.drawPath(shape)
+    # his legs are tucked under him and never drawn: only a paw he lifts to
+    # groom or bat at something appears (see groom_paw below)
 
     # tail: a round tube. Dark core, light along the side facing the lamp,
     # a cool rim along the other
@@ -748,34 +725,9 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.setBrush(under)
     p.drawPath(torso)
 
-    for shape, at in near_legs:                   # near legs: lit forms that shadow the body
-        cast(shape)
-        # the cool rim: the limb is painted once in rim light, then again
-        # nudged toward the lamp, leaving a crescent along its far edge
-        p.setBrush(RIM_LIMB)
-        p.drawPath(shape.translated(0.7, 0.45))
-        p.setBrush(leg_form(shape, 0.8))
-        p.drawPath(shape)
-        _sheen(p, shape, QPointF(at[2] - 2.8, at[3] - 3.6), 4.8, 34)     # puffy paw
 
     paint_ears()
     _paint_skull(p, pose, psi, skull_layer, head_local, (hxh + pose.head_dx, hyh), dev_scale)
-
-    if toes and groom_paw is None:               # two tiny toe lines per front paw
-        a_t = int(150 * (1 - pose.gait) * (1 - st * 0.5))
-        if a_t > 8:
-            p.setPen(QPen(QColor(0, 0, 0, a_t), 1.2, Qt.SolidLine, Qt.RoundCap))
-            for tx, ty, tw_ in toes:
-                for dx in (-0.34, 0.34):
-                    p.drawLine(QPointF(tx + dx * tw_, ty + 0.6), QPointF(tx + dx * tw_ * 1.06, ty + 3.6))
-            p.setPen(Qt.NoPen)
-
-    # the near thigh and shoulder catch the light: a black body still reads
-    # as having legs and haunches side-on
-    if contours:
-        a_ = int(34 * min(1.0, (sy - 0.45) * 3) * st)
-        for c_, r_, _start, _span in contours:
-            _sheen(p, torso, c_, r_ * 1.5, a_)
 
     p.save()
     p.setTransform(head_tf, True)
@@ -1176,11 +1128,18 @@ def _glasses(p: QPainter, pose: Pose, psi: float) -> None:
         if cf < 0.12:
             continue
         cf = cf + (1 - cf) * 0.6 * abs(math.sin(psi)) if cf < 1 else cf
-        rims.append((side, ex, ey + 1.5, 23.5 * cf, 23.5))
+        rims.append([side, ex, ey + 1.0, 21.0 * cf, 22.0])
+    rims.sort(key=lambda r_: r_[1])
+    if len(rims) == 2:                            # the lenses never touch: a gap for the bridge
+        gap = rims[1][1] - rims[0][1]
+        room = gap / 2 - 2.8
+        for r_ in rims:
+            if r_[3] > room:
+                r_[3] = max(10.0, room)
     if len(rims) == 2:                            # bridge over the nose
         (_, x1, y1, r1, _), (_, x2, y2, r2, _) = rims
-        bridge = QPainterPath(QPointF(x1 + r1 * 0.9, y1 - 5))
-        bridge.quadTo(QPointF((x1 + x2) / 2, y1 - 10), QPointF(x2 - r2 * 0.9, y2 - 5))
+        bridge = QPainterPath(QPointF(x1 + r1 * 0.97, y1 - 4))
+        bridge.quadTo(QPointF((x1 + x2) / 2, y1 - 8), QPointF(x2 - r2 * 0.97, y2 - 4))
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(FRAME_DARK, 3.6, Qt.SolidLine, Qt.RoundCap))
         p.drawPath(bridge)
@@ -1192,10 +1151,10 @@ def _glasses(p: QPainter, pose: Pose, psi: float) -> None:
         lens.setColorAt(0.55, QColor(210, 235, 255, 8))
         lens.setColorAt(1.0, QColor(210, 235, 255, 26))
         p.setBrush(lens)
-        p.setPen(QPen(FRAME_DARK, 3.4))                        # dark edge: depth on any wallpaper
+        p.setPen(QPen(FRAME_DARK, 2.8))                        # dark edge: depth on any wallpaper
         p.drawEllipse(QPointF(x, y), rx, ry)
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(FRAME, 1.5))
+        p.setPen(QPen(FRAME, 1.25))
         p.drawEllipse(QPointF(x, y), rx, ry)
         p.save()                                               # glare streaks, inside the lens
         clip = QPainterPath()
