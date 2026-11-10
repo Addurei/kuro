@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 
 log = logging.getLogger("kuro")
 
@@ -124,6 +125,39 @@ class NaturalVoice:
         return wav_bytes(pcm, self.rate, pitch)
 
 
+ENV_STEP = 1 / 30       # one loudness reading per 33 ms: enough for a mouth
+
+
+def envelope(wav: bytes, step: float = ENV_STEP) -> tuple[list[float], float]:
+    """How loud a WAV is over time, 0..1 per `step` seconds, plus its length in
+    seconds. This is what moves Kuro's mouth in time with his real voice."""
+    import array
+    import io
+    import wave
+    try:
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            rate, width, chans = w.getframerate(), w.getsampwidth(), w.getnchannels()
+            raw = w.readframes(w.getnframes())
+    except (wave.Error, EOFError):
+        return [], 0.0
+    if width != 2 or not raw or rate <= 0:
+        return [], 0.0
+    pcm = array.array("h")
+    pcm.frombytes(raw[: len(raw) // 2 * 2])
+    if chans > 1:
+        pcm = pcm[::chans]
+    n = max(1, int(rate * step))
+    out = []
+    for i in range(0, len(pcm), n):
+        chunk = pcm[i:i + n:4]                        # every 4th sample is plenty
+        out.append((sum(v * v for v in chunk) / max(1, len(chunk))) ** 0.5)
+    peak = max(out, default=0.0)
+    if peak < 1:
+        return [0.0] * len(out), len(pcm) / rate
+    # a soft curve so quiet syllables still open his mouth a little
+    return [min(1.0, (v / peak) ** 0.6) for v in out], len(pcm) / rate
+
+
 def play_wav(data: bytes) -> None:
     import winsound                                   # standard library, Windows
     winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
@@ -142,6 +176,10 @@ class Speaker:
         self.voice_name, self.cute = voice, cute
         self._natural: NaturalVoice | None = None
         self._want_reload = False
+        self._pending = 0                    # sentences queued or being spoken
+        self._lock = threading.Lock()
+        self._env: list[float] = []          # loudness of what's playing right now
+        self._env_t0 = 0.0
         self._ready = threading.Event()
         threading.Thread(target=self._run, daemon=True, name="tts").start()
         self._ready.wait(timeout=5)
@@ -198,24 +236,53 @@ class Speaker:
             text = self._q.get()
             if text is None:
                 break
-            natural = self._natural
             try:
-                if natural is not None:
-                    play_wav(natural.synth(text, self._rate,
-                                           CUTE_PITCH if self.cute else 1.0))
-                    continue
-            except Exception as e:                # broken voice file etc.: fall back
-                log.info("natural voice failed, using Windows voice: %s", e)
-                self._natural, self.engine = None, "windows"
-            try:
-                if sapi is not None:
-                    sapi.Speak(text, 0)           # 0 = speak now, wait until done
-            except Exception:
-                pass
+                self._speak(text, sapi)
+            finally:
+                self._env = []
+                with self._lock:
+                    self._pending = max(0, self._pending - 1)
+
+    def _speak(self, text: str, sapi) -> None:
+        natural = self._natural
+        try:
+            if natural is not None:
+                wav = natural.synth(text, self._rate, CUTE_PITCH if self.cute else 1.0)
+                env, _secs = envelope(wav)
+                self._env_t0, self._env = time.monotonic(), env
+                play_wav(wav)
+                return
+        except Exception as e:                    # broken voice file etc.: fall back
+            log.info("natural voice failed, using Windows voice: %s", e)
+            self._natural, self.engine = None, "windows"
+        self._env = []
+        try:
+            if sapi is not None:
+                sapi.Speak(text, 0)               # 0 = speak now, wait until done
+        except Exception:
+            pass
 
     def say(self, text: str) -> None:
         if text and (self.available or self._natural is not None):
+            with self._lock:
+                self._pending += 1
             self._q.put(text)
+
+    @property
+    def busy(self) -> bool:
+        """Still has something to say (queued, being made, or playing)."""
+        return self._pending > 0
+
+    def level(self) -> float | None:
+        """How loud his voice is at this instant, 0..1, for lip-sync. None when
+        it isn't known (silent, or the Windows voice): the cat then mimes."""
+        if not self.busy or self._natural is None:
+            return None
+        env = self._env
+        if not env:
+            return 0.0                            # between sentences: mouth closed
+        i = int((time.monotonic() - self._env_t0) / ENV_STEP)
+        return env[i] if 0 <= i < len(env) else 0.0
 
     def stop(self) -> None:
         self._q.put(None)

@@ -38,6 +38,17 @@ Tick each line; note anything odd with the time it happened, then share
 - [ ] Word / Google Docs: pencil; Blender: beret
 - [ ] At most one comment per 15 min; none during focus or fullscreen
 
+## Petting & play
+- [ ] Rub the cursor back and forth over his head (no clicking): he purrs, squeezes his eyes shut, leans into your hand, hearts float up; stops when you stop
+- [ ] Do the same while he sleeps: he purrs and smiles but stays asleep
+- [ ] Click his nose: eyes cross, then sparkle. Click his belly: giggle and a small hop
+- [ ] Click him 7 times fast: still gets grumpy
+- [ ] With "Speak replies" on (natural voice): his mouth opens and closes in time with the words, and shuts between sentences
+- [ ] Leave the mouse alone 5+ minutes, then move it: a happy hop to see you back
+- [ ] After 11 pm: sleepy half-closed eyes, a yawn now and then
+- [ ] Empty chat: three suggestion buttons; tapping one sends it
+- [ ] Right-click menu: icons swell under the cursor, fold away when you pick one
+
 ## Focus & sleep
 - [ ] Right-click → FOCUS: he goes to the taskbar, dozes off (heavy eyes, then closed), nose bubble + blep
 - [ ] Break and end of session messages

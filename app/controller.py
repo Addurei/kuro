@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .brain import Brain, context_prompt, strip_actions
 from . import activity, scan
-from .i18n import t
+from .i18n import chat_starters, t
 from .config import Settings, app_root, data_dir
 from .features import FeaturesMixin
 from .memory import HabitLog, MemoryStore, Reflector
@@ -188,6 +188,7 @@ class Controller(FeaturesMixin):
         self._tick.start(5000)
 
         self.speaker = self.listener = None
+        self._settle_waits = 0
         self._init_voice()
         self._init_hotkeys()
 
@@ -370,6 +371,12 @@ class Controller(FeaturesMixin):
         QTimer.singleShot(int(duration * 1000), self._settle)
 
     def _settle(self) -> None:
+        if (self.speaker and self.speaker.busy and self.s.speak_replies
+                and self.cat.state == "talking" and self._settle_waits < 40):
+            self._settle_waits += 1                      # still speaking: keep "talking"
+            QTimer.singleShot(500, self._settle)
+            return
+        self._settle_waits = 0
         if not self.busy and self.cat.state in ("talking", "happy", "listening"):
             # during a focus nap, go straight from the happy face to dozing off
             # (via "idle" his eyes would pop wide open for a second first)
@@ -456,6 +463,7 @@ class Controller(FeaturesMixin):
         self.google.client_id = self.s.google_client_id
         self.google.client_secret = self.s.google_client_secret
         self.hud.chat.set_status("online" if self.s.ready else "offline")
+        self.hud.chat.set_starters(*chat_starters(self.s))       # language may have changed
         self.cat.set_state("happy")
         QTimer.singleShot(1200, self._settle)
 
@@ -493,6 +501,7 @@ class Controller(FeaturesMixin):
         except Exception:
             return
         self.speaker = Speaker(self.s.tts_rate, self.s.voice, self.s.cute_voice)
+        self.cat.voice_level = self.speaker.level        # his mouth follows his voice
         self.listener = Listener(self.s)
 
     def start_listening(self) -> None:

@@ -26,13 +26,15 @@ import threading
 from PySide6.QtCore import (QEasingCurve, QElapsedTimer, QEvent, QPoint, QPointF,
                             QPropertyAnimation, QRectF, QVariantAnimation,
                             Qt, QTimer, Signal)
-from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen,
+                           QRadialGradient)
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
                                QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import theme
 from .. import hotkeys as HK
+from .. import i18n
 from .. import providers as P
 from ..voice import VOICES
 from .cat_rig import Spring
@@ -443,6 +445,32 @@ class Message(QWidget):
     def set_text(self, text: str) -> None:
         self.label.setText(text)
 
+    def arrive(self, gap: int) -> None:
+        """A new bubble eases up into place instead of popping in. (Done with
+        its margin, not an opacity effect: see the note above.)"""
+        self._rise = QVariantAnimation(self, startValue=float(gap + 12), endValue=float(gap),
+                                       duration=190, easingCurve=QEasingCurve.OutCubic)
+        self._rise.valueChanged.connect(
+            lambda v: self.setContentsMargins(0, int(round(v)), 0, 0))
+        self._rise.start()
+
+
+class Chip(QPushButton):
+    """A one-tap suggestion in the empty chat."""
+
+    def __init__(self, label: str, prompt: str):
+        super().__init__(label.replace("&", "&&"))
+        self.prompt = prompt
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFont(theme.sans(9))
+        self.setFixedHeight(28)
+        self.setStyleSheet(
+            "QPushButton { background: #15171c; border: 1px solid #23262d; border-radius: 13px;"
+            f" color: #c9ccd3; padding: 0 13px; font-family: {theme.SANS_CSS}; font-size: 9pt; }}"
+            f"QPushButton:hover {{ border-color: {_rgba(LIME_HEX, 0.55)}; color: {LIME_HEX}; }}"
+            f"QPushButton:pressed {{ background: {_rgba(LIME_HEX, 0.12)}; }}")
+        HoverFX(self, 13.0, 0.7)
+
 
 class ChatPage(QWidget):
     submitted = Signal(str)
@@ -450,7 +478,7 @@ class ChatPage(QWidget):
     clear_clicked = Signal()
     close_clicked = Signal()
 
-    def __init__(self, cat_name: str):
+    def __init__(self, cat_name: str, starters: tuple[str, list] | None = None):
         super().__init__()
         self.cat_name = cat_name
         self.busy = False
@@ -484,10 +512,19 @@ class ChatPage(QWidget):
         self.rows.setContentsMargins(0, 4, 6, 4)
         self.rows.setSpacing(0)
         self.rows.addStretch(1)
-        self.empty = QLabel(f"Ask {html.escape(cat_name)} to open an app, find a file,\n"
-                            f"set a reminder, or just talk.")
-        self.empty.setAlignment(Qt.AlignCenter)
-        self.empty.setStyleSheet(f"color: {FAINT_HEX};")
+        # nothing said yet: a hint and a few things to try in one tap
+        self.empty = QWidget()
+        self._empty_lay = QVBoxLayout(self.empty)
+        self._empty_lay.setContentsMargins(0, 0, 0, 14)
+        self._empty_lay.setSpacing(7)
+        self.hint = QLabel()
+        self.hint.setAlignment(Qt.AlignCenter)
+        self.hint.setFont(theme.sans(9))
+        self.hint.setStyleSheet(f"color: {FAINT_HEX}; padding-bottom: 3px;")
+        self._empty_lay.addWidget(self.hint)
+        self.chips: list[Chip] = []
+        self.set_starters(*(starters or ("Ask me anything, or try one of these",
+                                         [("What can you do?", "what can you do?")])))
         self.rows.addWidget(self.empty)
         self.dots_row = QWidget()
         dl = QHBoxLayout(self.dots_row)
@@ -526,6 +563,23 @@ class ChatPage(QWidget):
         self._typer = QTimer(self, interval=20, timeout=self._type_step)
         self._last_who = ""
 
+    def set_starters(self, hint: str, chips: list[tuple[str, str]]) -> None:
+        """The empty chat's hint and suggestions (in the chosen language)."""
+        self.hint.setText(hint)
+        for c in self.chips:
+            self._empty_lay.removeWidget(c)
+            c.deleteLater()
+        self.chips = []
+        for label, prompt in chips:
+            chip = Chip(label, prompt)
+            chip.clicked.connect(lambda _=False, text=prompt: self._suggest(text))
+            self._empty_lay.addWidget(chip, 0, Qt.AlignHCenter)
+            self.chips.append(chip)
+
+    def _suggest(self, text: str) -> None:
+        if not self.busy:
+            self.submitted.emit(text)
+
     # status lives in the orb only: calm when idle, quick while thinking
     def set_status(self, mode: str) -> None:
         self.orb.mode = mode
@@ -539,6 +593,8 @@ class ChatPage(QWidget):
         msg.setContentsMargins(0, gap, 0, 0)
         self._last_who = who
         self.rows.insertWidget(self.rows.count() - 1, msg)   # above the typing dots
+        if animate and self.isVisible():
+            msg.arrive(gap)
         if who == "cat" and animate:
             self._typing = (msg, text, 0)
             self._typer.start()
@@ -554,6 +610,8 @@ class ChatPage(QWidget):
             msg.setContentsMargins(0, gap, 0, 0)
             self._last_who = "cat"
             self.rows.insertWidget(self.rows.count() - 1, msg)
+            if self.isVisible():
+                msg.arrive(gap)
             self._stream_msg = msg
         msg = self._stream_msg
         msg.full = text
@@ -1833,7 +1891,7 @@ class Hud(QWidget):
         self.busy = False
 
         self.bubble = BubblePage(settings.cat_name)
-        self.chat = ChatPage(settings.cat_name)
+        self.chat = ChatPage(settings.cat_name, i18n.chat_starters(settings))
         self.settings = SettingsPage(settings, tester)
         self.confirm = ConfirmPage(settings.cat_name)
         self.study = StudyPage()
@@ -2088,11 +2146,18 @@ class RadialMenu(QWidget):
         self.centre = QPointF(130, 150)
         self.radius = 92
         self.springs = [Spring(0, 260, 0.6) for _ in items]
+        self.lift = [Spring(0, 380, 0.55) for _ in items]     # each icon swells under the cursor
+        self.tip = Spring(0, 300, 1.0)                        # the label fades in / out
+        self._tip_text = ""
         self._t = 0.0
         self.hover = -1
+        self._picked = None                                   # chosen: fold away, then run it
         self._timer = QTimer(self, interval=16, timeout=self._step)
 
     def popup(self, head: QPoint) -> None:
+        self._t, self.hover, self._picked = 0.0, -1, None
+        for sp in (*self.springs, *self.lift, self.tip):
+            sp.value = sp.vel = sp.target = 0.0
         self.follow(head)
         self.show()
         self._timer.start()
@@ -2115,11 +2180,25 @@ class RadialMenu(QWidget):
 
     def _step(self) -> None:
         self._t += 0.016
+        closing = self._picked is not None
         for i, s in enumerate(self.springs):
-            if self._t > i * 0.035:
+            if closing:
+                s.target = 0.0
+            elif self._t > i * 0.035:
                 s.target = 1.0
-            s.step(0.016)
-        if self._t > 1.0 and self.hover < 0 and all(abs(s.value - 1) < 0.002 for s in self.springs):
+            s.step(0.016 * (1.8 if closing else 1.0))
+            self.lift[i].target = 1.0 if (i == self.hover and not closing) else 0.0
+            self.lift[i].step(0.016)
+        self.tip.target = 1.0 if (self.hover >= 0 and not closing) else 0.0
+        self.tip.step(0.016)
+        if closing and all(s.value < 0.06 for s in self.springs):
+            run, self._picked = self._picked, None
+            self.close()
+            QTimer.singleShot(0, run)
+            return
+        moving = (any(abs(s.value - s.target) > 0.002 or abs(s.vel) > 0.01
+                      for s in (*self.springs, *self.lift, self.tip)))
+        if self._t > 1.0 and not moving:
             return                               # settled: no need to repaint 60x a second
         self.update()
 
@@ -2134,14 +2213,26 @@ class RadialMenu(QWidget):
         hover = self._hit(e.position())
         if hover != self.hover:
             self.hover = hover
+            if hover >= 0:
+                self._tip_text = self.items[hover][1]
             self.update()
         self.setCursor(Qt.PointingHandCursor if self.hover >= 0 else Qt.ArrowCursor)
 
+    def leaveEvent(self, e) -> None:
+        self.hover = -1
+        self.update()
+        super().leaveEvent(e)
+
     def mousePressEvent(self, e) -> None:
+        if self._picked is not None:
+            return
         i = self._hit(e.position())
-        self.close()
-        if i >= 0:
-            QTimer.singleShot(0, self.items[i][2])
+        if i < 0:
+            self.close()
+            return
+        self._picked = self.items[i][2]          # the icons fold back in, then it runs
+        self.lift[i].kick(-6)
+        self.update()
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
@@ -2152,24 +2243,38 @@ class RadialMenu(QWidget):
                 continue
             c = self._pos(i)
             hov = i == self.hover
-            r = 19 * (0.6 + 0.4 * k) * (1.12 if hov else 1.0)
+            up = max(-0.3, min(1.3, self.lift[i].value))
+            # under the cursor an icon swells and slides out a touch
+            out = QPointF(c.x() - self.centre.x(), c.y() - self.centre.y())
+            dist = math.hypot(out.x(), out.y()) or 1.0
+            c = QPointF(c.x() + out.x() / dist * 3.5 * up, c.y() + out.y() / dist * 3.5 * up)
+            r = 19 * (0.6 + 0.4 * k) * (1 + 0.14 * up)
             p.setOpacity(k)
+            if up > 0.03:                            # soft lime halo
+                g = QRadialGradient(c, r * 1.7)
+                g.setColorAt(0.55, theme.lime(0.16 * min(1.0, up)))
+                g.setColorAt(1.0, theme.lime(0.0))
+                p.setPen(Qt.NoPen)
+                p.setBrush(g)
+                p.drawEllipse(c, r * 1.7, r * 1.7)
             path = QPainterPath()
             path.addEllipse(c, r, r)
             theme.paint_matte(p, path)
-            p.setPen(QPen(theme.lime(0.9 if hov else 0.25), 1.3 if hov else 1.0))
+            a = max(0.0, min(1.0, up))
+            p.setPen(QPen(theme.lime(0.25 + 0.65 * a), 1.0 + 0.3 * a))
             p.setBrush(Qt.NoBrush)
             p.drawEllipse(c, r, r)
             col = QColor(theme.DANGER_HEX) if (hov and kind == "power") else \
                 theme.LIME if hov else QColor("#c9ccd3")
             theme.icon(p, kind, c, r * 0.95, col)
-        if self.hover >= 0:
-            p.setOpacity(1.0)
-            label = self.items[self.hover][1]
+        tip = max(0.0, min(1.0, self.tip.value))
+        if tip > 0.02 and self._tip_text:
+            p.setOpacity(tip)
+            label = self._tip_text
             p.setFont(theme.mono(7.5, bold=True, spacing=135))
             fm = p.fontMetrics()
             w = fm.horizontalAdvance(label) + 18
-            box = QRectF(self.centre.x() - w / 2, self.centre.y() - 34, w, 20)
+            box = QRectF(self.centre.x() - w / 2, self.centre.y() - 34 + 4 * (1 - tip), w, 20)
             path = QPainterPath()
             path.addRoundedRect(box, 10, 10)
             theme.paint_matte(p, path)

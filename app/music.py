@@ -70,6 +70,12 @@ STRONG_MUSIC = re.compile(r"(official (music |lyric )?(video|audio)|lyric video|
 STRONG_ARTIST = re.compile(r"(- topic$|vevo)", re.I)
 
 
+# a social site's own page title ("TikTok - Make Your Day"), not a song
+SITE_PAGE = re.compile(r"^\s*(\(\d+\+?\)\s*)?(tiktok|instagram|facebook|reels|twitch|reddit|"
+                       r"netflix)\b\s*([-–|•:·]|$)"
+                       r"|[|•·-]\s*(tiktok|instagram|facebook|reddit|twitch)\s*$", re.I)
+
+
 def classify(t: Track, app_id: str = "") -> bool | None:
     """True = a song / music video, False = anything else (ads, documentaries,
     talk, games...), None = can't tell from the metadata alone."""
@@ -82,7 +88,7 @@ def classify(t: Track, app_id: str = "") -> bool | None:
     low = (app_id or getattr(t, "app_id", "") or t.source).lower()
     if any(m in low for m in MUSIC_APPS):          # Spotify etc.: music unless a podcast
         return not PODCAST.search(f"{title} {artist}")
-    if NOT_MUSIC.search(title):
+    if NOT_MUSIC.search(title) or SITE_PAGE.search(title):
         return False
     if t.duration and t.duration > 20 * 60 and not MUSIC_WORDS.search(title):
         return False                              # long talks / movies (mixes say "mix")

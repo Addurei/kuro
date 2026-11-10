@@ -59,6 +59,28 @@ LINES: dict[str, dict[str, str]] = {
 }
 
 
+# Chat's empty state: a hint, then things to try in one tap: (label, what gets sent)
+CHAT_HINT = {"English": "Ask me anything, or try one of these",
+             "Filipino": "Magtanong ka lang, o subukan ang isa sa mga ito",
+             "Taglish": "Ask me anything, o i-try mo 'to"}
+CHAT_CHIPS = {
+    "English": [("Open Spotify", "open Spotify"),
+                ("Focus for 25 minutes", "start a 25 minute focus session"),
+                ("What can you do?", "what can you do?")],
+    "Filipino": [("Buksan ang Spotify", "buksan mo ang Spotify"),
+                 ("Mag-focus nang 25 minuto", "mag-focus tayo nang 25 minuto"),
+                 ("Ano'ng kaya mong gawin?", "ano ang mga kaya mong gawin?")],
+    "Taglish": [("I-open ang Spotify", "i-open mo yung Spotify"),
+                ("Focus for 25 minutes", "mag-focus tayo for 25 minutes"),
+                ("Ano'ng kaya mong gawin?", "ano yung mga kaya mong gawin?")],
+}
+
+
+def chat_starters(settings) -> tuple[str, list[tuple[str, str]]]:
+    v = lang(settings)
+    return CHAT_HINT[v], CHAT_CHIPS[v]
+
+
 def lang(settings) -> str:
     v = getattr(settings, "language", "English")
     return v if v in LANGS else "English"

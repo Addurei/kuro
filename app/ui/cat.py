@@ -24,7 +24,7 @@ from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QImage, QPai
                            QRadialGradient)
 from PySide6.QtWidgets import QWidget
 
-from .cat_rig import EYE, Pose, Spring, draw_cat
+from .cat_rig import EYE, Pose, Spring, _heart, draw_cat
 
 HOP_GRAVITY = 900.0     # rig units/s^2 for little hops
 BLINK_TIME = 0.26       # seconds to vanish (and again to reappear)
@@ -103,8 +103,28 @@ class CatWidget(QWidget):
             "blep": S(0, 30, 1.0),             # sleepy tongue tip
             "glasses": S(0, 70, 0.6), "pencil": S(0, 70, 0.6), "beret": S(0, 70, 0.6),
             "knead": S(0, 40, 1.0),            # typing along with you
+            "purr": S(0, 30, 1.0), "sparkle": S(0, 60, 1.0),
+            "mouth": S(0, 520, 0.8),           # follows his voice (lip-sync)
         }
         self._idle_in = random.uniform(12, 25)
+        # affection: stroking his head, boops, tickles, greeting you back
+        self.geo: dict = {}                 # where his head / nose / belly are (from the rig)
+        self._pet = 0.0                     # 0..1 how petted he feels right now
+        self._stroke = 0.0                  # recent stroking over his head, in pixels
+        self._pet_last = -99.0
+        self._pet_x = 0.0                   # which side of his head your hand is on (-1..1)
+        self._hover_pos: QPointF | None = None
+        self._heart_in = 0.0
+        self._boop_until = -99.0
+        self._giggle_until = -99.0
+        self._joy_until = -99.0
+        self._sparkle_until = -99.0
+        self._hop_pending: tuple[float, float] | None = None
+        self._night = False
+        self._night_check = -99.0
+        self._night_yawn_in = random.uniform(70, 160)
+        self.voice_level: Callable[[], float | None] = lambda: None
+        self.setCursor(Qt.OpenHandCursor)
         # expressions, cursor attention, music
         self.expr = ""
         self._expr_until = 0.0
@@ -265,10 +285,11 @@ class CatWidget(QWidget):
         self.scanning = on
 
     def hop(self, strength: float = 150) -> None:
-        if self.hop_y <= 0.5:
-            self.hop_v = strength
-            self.sp["squash"].kick(1.6)
-            self.sp["hlag_y"].kick(30)
+        """Anticipation first: he crouches for a few frames, then springs up."""
+        if self.hop_y <= 0.5 and self._hop_pending is None:
+            self._hop_pending = (strength, self.t + 0.085)
+            self.sp["squash"].kick(-1.5)
+            self.sp["ear"].kick(-3)
 
     def go_to(self, x: float, y: float, run: bool | None = None) -> None:
         """He doesn't walk any more: wherever he goes, he teleports."""
@@ -384,6 +405,7 @@ class CatWidget(QWidget):
         self._set_targets(dt)
         self._idle_actions(dt)                 # these adjust targets, so they run
         self._attention(dt)                    # before the springs step
+        self._affection(dt)
         self._drift()
         if self.scanning:
             self._scan_look()
@@ -422,7 +444,9 @@ class CatWidget(QWidget):
                   or self._scan_fade > 0 or self._action or self.expr
                   or self.state in ("talking", "happy", "listening", "thinking")
                   or self._cursor_speed > 400 or self._blink >= 0
-                  or self.sp["knead"].value > 0.05 or self._moving())
+                  or self.sp["knead"].value > 0.05 or self._moving()
+                  or self._pet > 0.02 or self._hop_pending is not None
+                  or self.sp["mouth"].value > 0.03)
         if self.away:
             ms = 250
         elif lively:
@@ -624,7 +648,9 @@ class CatWidget(QWidget):
         if moved < 2:
             self._cursor_still += dt
         else:
-            if self._cursor_still > 2 and idle and self._cursor_dist < 400:
+            if self._cursor_still > 300 and idle and not self.away:
+                self._welcome_back()                  # you were gone a while: happy to see you
+            elif self._cursor_still > 2 and idle and self._cursor_dist < 400:
                 self.sp["ear"].kick(5)                # "oh, you're back"
             self._cursor_still = 0.0
             self._saccade = (0.0, 0.0)
@@ -639,7 +665,93 @@ class CatWidget(QWidget):
         else:
             self.sp["tw_l"].target = self.sp["tw_r"].target = 0.0
 
+    # ---- affection ----------------------------------------------------
+    def _welcome_back(self) -> None:
+        self._joy_until = self.t + 0.9
+        self._sparkle_until = self.t + 2.4
+        self.hop(150)
+        self._hearts(2)
+
+    def _hearts(self, n: int = 1) -> None:
+        top = self.mapToGlobal(QPoint(int(self.head_top.x()), int(self.head_top.y() + 30 * self.k)))
+        for _ in range(n):
+            side = random.choice((-1, 1)) * random.uniform(16, 46) * self.k
+            self._sparks.append(_Spark(top.x() + side, top.y() + random.uniform(-4, 10) * self.k,
+                                       random.uniform(-6, 6), random.uniform(-30, -20),
+                                       self.t, random.uniform(1.1, 1.6),
+                                       random.uniform(4.8, 6.6) * self.k / 0.82, "heart"))
+
+    def _is_night(self) -> bool:
+        if self.t - self._night_check > 60:
+            self._night_check = self.t
+            import datetime
+            hour = datetime.datetime.now().hour
+            self._night = hour >= 23 or hour < 5
+        return self._night
+
+    def _affection(self, dt: float) -> None:
+        """Stroke his head and he purrs, leans into your hand and squeezes his
+        eyes shut; hearts drift up. Also: boops, tickles, his voice moving his
+        mouth, sleepy eyes late at night. Runs after the mood targets are set."""
+        sp, t = self.sp, self.t
+        # --- petting: you have to keep stroking, like a real cat
+        self._stroke = max(0.0, self._stroke - 110 * dt)
+        calm = self.mode == "rest" and self.expr not in ("annoyed", "dizzy")
+        stroking = calm and self._stroke > 70 and t - self._pet_last < 0.7
+        self._pet = (min(1.0, self._pet + dt * 1.5) if stroking
+                     else max(0.0, self._pet - dt * 0.55))
+        k = self._pet
+        sp["purr"].target = k
+        if k > 0.12:
+            sp["happy"].target = max(sp["happy"].target, min(1.0, (k - 0.12) * 1.7))
+            sp["tilt"].target += 10 * k * self._pet_x          # leans into your hand
+            sp["lean"].target += 3.5 * k * self._pet_x
+            sp["ear"].target = min(sp["ear"].target, 0.2) - 0.35 * k
+            sp["tail_sway"].target = max(sp["tail_sway"].target, 1.3)
+            self._heart_in -= dt
+            if k > 0.55 and self._heart_in <= 0:
+                self._heart_in = random.uniform(0.5, 0.95)
+                self._hearts(1)
+        # --- boop: eyes cross onto his nose for a beat
+        if t < self._boop_until:
+            sp["converge"].target = 1.0
+            sp["look_x"].target, sp["look_y"].target = 0.0, 0.55
+            sp["eye_scale"].target = 1.1
+        # --- tickle / happy to see you: squeezed-shut smile, then sparkly eyes
+        if t < self._giggle_until:
+            sp["happy"].target = 1.0
+            sp["tilt"].target += 7 * math.sin(t * 26)
+        if t < self._joy_until:
+            sp["happy"].target = 1.0
+        sp["sparkle"].target = (1.0 if (t < self._sparkle_until or 0.1 < k < 0.6
+                                        or self.expr == "love") else 0.0)
+        # --- late at night he's drowsy: heavy lids, the odd yawn
+        if self._is_night() and self.state == "idle" and self.mode == "rest" and k < 0.1:
+            sp["lid"].target = max(sp["lid"].target, 0.24)
+            self._night_yawn_in -= dt
+            if self._night_yawn_in <= 0 and not self._action:
+                self._night_yawn_in = random.uniform(90, 200)
+                self._action, self._action_t = "yawn", 0.0
+        # --- mouth: follows the real loudness of his voice when it's known,
+        # otherwise a syllable-like chatter while he's "talking"
+        level = None
+        try:
+            level = self.voice_level()
+        except Exception:
+            pass
+        if level is not None:
+            sp["mouth"].target = min(1.0, level * 1.15)
+        elif self.state == "talking":
+            sp["mouth"].target = (abs(math.sin(t * 8.5))
+                                  * (0.5 + 0.5 * math.sin(t * 2.7 + 1.3) ** 2))
+        else:
+            sp["mouth"].target = 0.0
+
     def _hop_step(self, dt: float) -> None:
+        if self._hop_pending is not None and self.t >= self._hop_pending[1]:
+            self.hop_v, self._hop_pending = self._hop_pending[0], None
+            self.sp["squash"].kick(2.1)               # ...the stretch as he leaves the ground
+            self.sp["hlag_y"].kick(30)
         if self.hop_y > 0 or self.hop_v > 0:
             self.hop_v -= HOP_GRAVITY * dt
             self.hop_y += self.hop_v * dt
@@ -976,7 +1088,7 @@ class CatWidget(QWidget):
         self._wander_in = random.uniform(45, 120)     # teleports now and then, not constantly
 
     def _maybe_wander(self, dt: float) -> None:
-        if self.state != "idle" or not self.can_wander():
+        if self.state != "idle" or not self.can_wander() or self._pet > 0.05:
             return
         self._wander_in -= dt
         if self._wander_in > 0:
@@ -1022,6 +1134,8 @@ class CatWidget(QWidget):
         for s in self._sparks:
             s.x += s.vx * dt
             s.y += s.vy * dt
+            if s.kind == "heart":                     # hearts just float up, unhurried
+                continue
             s.vx *= math.exp(-3 * dt)
             s.vy = s.vy * math.exp(-3 * dt) - 20 * dt
         self._sparks = [s for s in self._sparks if self.t - s.born < s.life]
@@ -1044,14 +1158,48 @@ class CatWidget(QWidget):
         elif e.button() == Qt.RightButton:
             self.menu_requested.emit(self.head_anchor())
 
+    def _dist(self, pos: QPointF, key: str) -> float:
+        pt = self.geo.get(key)
+        return math.hypot(pos.x() - pt.x(), pos.y() - pt.y()) if pt is not None else 1e9
+
+    def _spot(self, pos: QPointF) -> str:
+        """What you touched: 'nose', 'belly', 'head' or ''."""
+        r = self.geo.get("head_r", 40 * self.k)
+        if self._dist(pos, "nose") < 0.2 * r:
+            return "nose"
+        if self._dist(pos, "head") < 1.12 * r:
+            return "head"
+        if self._dist(pos, "belly") < 0.62 * r:
+            return "belly"
+        return ""
+
+    def _hover_move(self, pos: QPointF) -> None:
+        """No button held: moving your cursor back and forth over his head pets him."""
+        prev, self._hover_pos = self._hover_pos, QPointF(pos)
+        if prev is None or self._spot(pos) not in ("head", "nose"):
+            return
+        self._stroke = min(260.0, self._stroke + min(40.0, math.hypot(pos.x() - prev.x(),
+                                                                       pos.y() - prev.y())))
+        self._pet_last = self.t
+        head, r = self.geo.get("head"), self.geo.get("head_r", 40 * self.k)
+        if head is not None:
+            self._pet_x = max(-1.0, min(1.0, (pos.x() - head.x()) / r))
+
+    def leaveEvent(self, e) -> None:
+        self._hover_pos = None
+        super().leaveEvent(e)
+
     def mouseMoveEvent(self, e) -> None:
         if self._press is None or not (e.buttons() & Qt.LeftButton):
+            self._hover_move(e.position())
             return
         g = e.globalPosition()
         if self.mode != "drag":
             if (g.toPoint() - self._press).manhattanLength() < 5:
                 return
             self.mode = "drag"
+            self.setCursor(Qt.ClosedHandCursor)
+            self._pet = self._stroke = 0.0
             self.vx = self.vy = 0.0
             self.sp["squash"].kick(1.4)
             self.react("surprised", 0.9)
@@ -1067,6 +1215,7 @@ class CatWidget(QWidget):
         if e.button() != Qt.LeftButton:
             return
         if self.mode == "drag":
+            self.setCursor(Qt.OpenHandCursor)
             geo = self._screen_geo()
             self.fy = min(max(self.fy, geo.top() + 30), self._floor())
             self.fx = min(max(self.fx, geo.left()), geo.right() - self.width())
@@ -1083,20 +1232,43 @@ class CatWidget(QWidget):
                 self._settle_rest()
             self.moved.emit()
         else:
-            self._petted()
+            self._petted(self._spot(e.position()))
             self.clicked.emit()
         self._press = None
 
-    def _petted(self) -> None:
-        """A few pets in a row: heart eyes. Way too many: grumpy."""
+    def _petted(self, spot: str = "head") -> None:
+        """Clicks: a boop on the nose, a tickle on the belly, pats on the head.
+        A few in a row: heart eyes. Way too many: grumpy."""
         now = self.t
         self._clicks = [c for c in self._clicks if now - c < 4.0] + [now]
         n = len(self._clicks)
         if n >= 7:
             self.react("annoyed", 2.6)
             self._clicks.clear()
-        elif n >= 3 and self.expr != "annoyed":
+            return
+        if self.expr == "annoyed" or self.mode != "rest":
+            return
+        if spot == "nose":                            # boop!
+            self._boop_until = now + 0.75
+            self._sparkle_until = now + 2.4           # ...then sparkly eyes
+            self.sp["squash"].kick(-1.1)
+            self.sp["hlag_y"].kick(22)
+            self.sp["whisk"].kick(random.choice((-1, 1)) * 260)
+            self.sp["tw_l"].kick(160)
+            self.sp["tw_r"].kick(-160)
+        elif spot == "belly":                         # tickle
+            self._giggle_until = now + 0.9
+            self.sp["jig"].kick(30)
+            self.sp["squash"].kick(1.0)
+            self.hop(70)
+        elif n >= 3:
             self.react("love", 2.4)
+            self._hearts(2)
+        else:                                         # a pat: a happy little squish
+            self.sp["squash"].kick(-0.9)
+            self.sp["ear"].kick(-4)
+            self._stroke = min(260.0, self._stroke + 60)
+            self._pet_last = now
 
     def mouseDoubleClickEvent(self, e) -> None:
         if e.button() == Qt.LeftButton:
@@ -1106,8 +1278,7 @@ class CatWidget(QWidget):
     def pose(self) -> Pose:
         sp, t = self.sp, self.t
         blink = math.sin(math.pi * self._blink) if self._blink >= 0 else 0.0
-        talk = 1.0 if self.state == "talking" else 0.0
-        chatter = abs(math.sin(t * 8.5)) * talk
+        chatter = max(0.0, min(1.0, sp["mouth"].value))
         sleep = sp["sleep"].value
         breath = math.sin(t * (1.3 if sleep > 0.5 else 2.4)) * (1 + sleep)
         # eyes: the nodding-off curve while asleep, the spring when waking up
@@ -1156,6 +1327,8 @@ class CatWidget(QWidget):
             whisker=sp["whisk"].value,
             converge=max(0.0, min(1.0, sp["converge"].value)),
             pupil=max(0.5, sp["pupil"].value),
+            sparkle=max(0.0, min(1.0, sp["sparkle"].value)),
+            purr=max(0.0, min(1.0, sp["purr"].value)),
             lid=max(0.0, min(0.9, sp["lid"].value)),
             expr=self.expr or ("vibe" if self.music else ""),
             expr_amt=max(0.0, min(1.0, sp["expr"].value)),
@@ -1216,14 +1389,14 @@ class CatWidget(QWidget):
         if teleporting and self._tp == "portal":
             self._paint_portal(p)
         if alpha > 0.995 and not (teleporting and (self._tp_dy or self._glitch)):
-            _paws, top = draw_cat(p, self.pose(), self.base, self.k)
+            _paws, top = draw_cat(p, self.pose(), self.base, self.k, self.geo)
         else:   # render once to an image: fades without seams, can be sliced/clipped
             dpr = self.devicePixelRatioF()
             img = QImage(self.size() * dpr, QImage.Format_ARGB32_Premultiplied)
             img.setDevicePixelRatio(dpr)
             img.fill(Qt.transparent)
             ip = QPainter(img)
-            _paws, top = draw_cat(ip, self.pose(), self.base, self.k)
+            _paws, top = draw_cat(ip, self.pose(), self.base, self.k, self.geo)
             ip.end()
             p.save()
             if self._tp_dy > 0:                       # sinking into the portal
@@ -1295,7 +1468,13 @@ class CatWidget(QWidget):
         for s in self._sparks:
             a = max(0.0, 1 - (self.t - s.born) / s.life)
             x, y = s.x - origin.x(), s.y - origin.y()
-            if s.kind == "puff":
+            if s.kind == "heart":                    # drifts up with a little sway, then fades
+                age = self.t - s.born
+                grow = min(1.0, age / 0.18)
+                col = QColor(255, 122, 158, int(235 * min(1.0, a * 1.6)))
+                p.setBrush(col)
+                p.drawPath(_heart(x + 5 * math.sin(age * 4 + s.born), y, s.size * grow))
+            elif s.kind == "puff":
                 p.setBrush(QColor(210, 212, 222, int(150 * a * a)))
                 r = s.size * (1.5 - 0.5 * a)
                 p.drawEllipse(QPointF(x, y), r, r)

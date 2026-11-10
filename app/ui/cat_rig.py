@@ -21,14 +21,18 @@ import math
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QFont, QPainter, QPainterPath, QPen,
+from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen,
                            QRadialGradient, QTransform)
+
 
 FUR = QColor(10, 10, 12)
 FUR_FAR = QColor(27, 27, 32)           # far-side limbs: a touch lighter = depth
 RIM = QColor(255, 255, 255, 36)        # faint outline so he reads on dark wallpapers
 INNER_EAR = QColor(238, 238, 242)
 EYE = QColor(186, 226, 92)             # Kuro's lime green
+IRIS_LIGHT = QColor(222, 246, 138)     # where light pools at the bottom of the iris
+IRIS_DEEP = QColor(160, 208, 70)       # toward the rim
+IRIS_RIM = QColor(112, 160, 44)        # the thin dark ring that makes eyes look round
 PUPIL = QColor(3, 3, 5)
 
 HEAD_W, HEAD_H, HEAD_D = 46.0, 36.0, 40.0   # head ellipsoid radii (side, up, forward)
@@ -114,6 +118,8 @@ class Pose:
     yawn: float = 0.0          # 0..1 big yawn
     converge: float = 0.0      # 0..1 eyes cross slightly toward a near cursor
     pupil: float = 1.0         # pupil size (0.6 tiny/surprised .. 1.3 big/smitten)
+    sparkle: float = 0.0       # 0..1 twinkling star glints (delighted, being petted)
+    purr: float = 0.0          # 0..1 purring: a fine, fast tremble through his body
     lid: float = 0.0           # 0..1 upper eyelids lowered (annoyed, relaxed)
     expr: str = ""             # "", "dizzy", "love", "surprised", "annoyed", "vibe"
     expr_amt: float = 0.0      # 0..1 blend of the special expression
@@ -256,8 +262,8 @@ EAR_FRONT = 0.35 + 0.65 * math.cos(math.radians(EAR_PHI * 0.6))
 
 
 # ---------------------------------------------------------------- body
-def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
-             ) -> tuple[list[Paw], QPointF]:
+def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
+             geo: dict | None = None) -> tuple[list[Paw], QPointF]:
     """Paint Kuro. Returns his paws and the top of his head, in widget
     coordinates (for paw prints and for pinning the HUD above him)."""
     yaw = math.radians(max(-88.0, min(88.0, pose.yaw)))
@@ -292,6 +298,8 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(0, 1.0), span * 0.8, 3.2)
 
+    if pose.purr > 0.01:                          # purring: a fine, fast tremble
+        p.translate(0.55 * pose.purr * math.sin(pose.t * 150), 0)
     p.translate(0, -pose.lift)
     p.scale(1 - pose.squash * 0.5, 1 + pose.squash)
     p.translate(0, -40)
@@ -353,6 +361,7 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
     groom_paw = None              # a paw raised to his face is drawn in front of it
     contours = []                 # (centre, radius, start_deg, span_deg) for near haunch/shoulder
     paws: list[Paw] = []
+    toes: list[tuple[float, float, float]] = []
     for front in (1, 0):
         for side in (-1, 1):
             if front:
@@ -429,6 +438,8 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
                     contours.append((QPointF(rx_ - 3 * math.copysign(1, math.sin(yaw)), root_y),
                                      11.0, -80, 150))
             paws.append(Paw(QPointF(px, tgt[1] + 2.5), planted and pose.gait > 0.2, near))
+            if front and near and cyaw > 0.5:        # facing you: little toes on his front paws
+                toes.append((px, tgt[1] + 0.2, math.hypot(8.0 * sy, 6.8 * cyaw)))
 
     # ---- tail: tapered, curling, travelling wave
     tb_f = hf - rh * 0.85
@@ -541,6 +552,15 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
         p.setBrush(FUR)
         p.drawPath(head)
 
+    if toes and groom_paw is None:               # two tiny toe lines per front paw
+        a_t = int(120 * (1 - pose.gait) * (1 - st * 0.5))
+        if a_t > 8:
+            p.setPen(QPen(QColor(70, 72, 82, a_t), 1.1, Qt.SolidLine, Qt.RoundCap))
+            for tx, ty, tw_ in toes:
+                for dx in (-0.34, 0.34):
+                    p.drawLine(QPointF(tx + dx * tw_, ty + 0.6), QPointF(tx + dx * tw_ * 1.06, ty + 3.6))
+            p.setPen(Qt.NoPen)
+
     # faint contour lines for the near thigh and shoulder: a cartoon trick
     # so a black body still reads as having legs and haunches side-on
     if contours:                    # soft light instead of lines: haunch/shoulder volume
@@ -588,6 +608,12 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float
     # paw positions and head top -> widget coordinates
     world = p.transform()
     top = world.map(head_tf.map(QPointF(0, -HEAD_H - 14)))
+    if geo is not None:                           # where things are, for petting and boops
+        nx_, ny_, _f = on_head(0, -40, psi)
+        geo["head"] = world.map(hc)
+        geo["head_r"] = HEAD_H * HEAD_SCALE * scale
+        geo["nose"] = world.map(head_tf.map(QPointF(nx_, ny_)))
+        geo["belly"] = world.map(QPointF(bx0, (hy + cy) / 2 + 4))
     p.restore()
     return [Paw(world.map(w.pos), w.planted, w.near) for w in paws], top
 
@@ -758,8 +784,13 @@ def _eye_centre(side: int, psi: float) -> tuple[float, float, float]:
     return ex * (1 - 0.42 * turn * turn), ey, facing
 
 
+FRAME = QColor(204, 209, 222)          # silver wire frames: read on black fur, don't fight the lime
+FRAME_DARK = QColor(16, 17, 21)
+
+
 def _glasses(p: QPainter, pose: Pose, psi: float) -> None:
-    """Big round study glasses: they drop onto his nose when you code or read."""
+    """Round wire study glasses: they drop onto his nose when you code or read.
+    Thin silver frames sit clear of his eyes, with a glassy streak on each lens."""
     g = pose.glasses
     if g < 0.02:
         return
@@ -773,27 +804,37 @@ def _glasses(p: QPainter, pose: Pose, psi: float) -> None:
         if cf < 0.12:
             continue
         cf = cf + (1 - cf) * 0.6 * abs(math.sin(psi)) if cf < 1 else cf
-        rims.append((side, ex, ey + 1, 21.5 * cf, 21.5))
+        rims.append((side, ex, ey + 1.5, 23.5 * cf, 23.5))
     if len(rims) == 2:                            # bridge over the nose
         (_, x1, y1, r1, _), (_, x2, y2, r2, _) = rims
-        bridge = QPainterPath(QPointF(x1 + r1 * 0.92, y1 - 3))
-        bridge.quadTo(QPointF((x1 + x2) / 2, y1 - 9), QPointF(x2 - r2 * 0.92, y2 - 3))
-        p.setPen(QPen(QColor(40, 42, 50), 3.4, Qt.SolidLine, Qt.RoundCap))
+        bridge = QPainterPath(QPointF(x1 + r1 * 0.9, y1 - 5))
+        bridge.quadTo(QPointF((x1 + x2) / 2, y1 - 10), QPointF(x2 - r2 * 0.9, y2 - 5))
         p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(FRAME_DARK, 3.6, Qt.SolidLine, Qt.RoundCap))
         p.drawPath(bridge)
-        p.setPen(QPen(QColor(186, 226, 92, 200), 1.3, Qt.SolidLine, Qt.RoundCap))
+        p.setPen(QPen(FRAME, 1.7, Qt.SolidLine, Qt.RoundCap))
         p.drawPath(bridge)
     for side, x, y, rx, ry in rims:
-        p.setBrush(QColor(190, 225, 255, 26))      # faint lens tint
-        p.setPen(QPen(QColor(40, 42, 50), 3.6))
+        lens = QLinearGradient(QPointF(x - rx, y - ry), QPointF(x + rx, y + ry))
+        lens.setColorAt(0.0, QColor(210, 235, 255, 46))        # glass: cool at the top-left
+        lens.setColorAt(0.55, QColor(210, 235, 255, 8))
+        lens.setColorAt(1.0, QColor(210, 235, 255, 26))
+        p.setBrush(lens)
+        p.setPen(QPen(FRAME_DARK, 3.4))                        # dark edge: depth on any wallpaper
         p.drawEllipse(QPointF(x, y), rx, ry)
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(186, 226, 92, 210), 1.4))
+        p.setPen(QPen(FRAME, 1.5))
         p.drawEllipse(QPointF(x, y), rx, ry)
-        glare = QPainterPath(QPointF(x - rx * 0.55, y - ry * 0.15))   # lens shine
-        glare.quadTo(QPointF(x - rx * 0.5, y - ry * 0.6), QPointF(x - rx * 0.1, y - ry * 0.68))
-        p.setPen(QPen(QColor(255, 255, 255, 120), 2.0, Qt.SolidLine, Qt.RoundCap))
-        p.drawPath(glare)
+        p.save()                                               # glare streaks, inside the lens
+        clip = QPainterPath()
+        clip.addEllipse(QPointF(x, y), rx - 1.6, ry - 1.6)
+        p.setClipPath(clip, Qt.IntersectClip)
+        sweep = math.sin(pose.t * 0.7) * 3.0                   # the light drifts as he breathes
+        p.setPen(QPen(QColor(255, 255, 255, 78), 3.2, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(x - rx * 0.95 + sweep, y - ry * 0.05), QPointF(x - rx * 0.1 + sweep, y - ry))
+        p.setPen(QPen(QColor(255, 255, 255, 46), 1.4, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(x - rx * 0.7 + sweep, y + ry * 0.25), QPointF(x + rx * 0.15 + sweep, y - ry))
+        p.restore()
     p.restore()
 
 
@@ -980,7 +1021,20 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             p.setOpacity(base_op * fade)
             p.setClipPath(eye_shape, Qt.IntersectClip)
             p.setPen(Qt.NoPen)
-            p.setBrush(EYE)
+            # iris: same lime, but with depth. Brighter toward the bottom where
+            # light pools, a darker ring at the rim, and the shadow his upper
+            # lid casts. Still reads as Kuro's flat lime from a distance.
+            iris = QRadialGradient(QPointF(ex, ey + ry * 0.38), max(rx, ry) * 1.25)
+            iris.setColorAt(0.0, IRIS_LIGHT)
+            iris.setColorAt(0.55, EYE)
+            iris.setColorAt(0.9, IRIS_DEEP)
+            iris.setColorAt(1.0, IRIS_RIM)
+            p.setBrush(iris)
+            p.drawEllipse(c, rx, ry)
+            shade = QLinearGradient(QPointF(ex, ey - ry), QPointF(ex, ey - ry * 0.35))
+            shade.setColorAt(0.0, QColor(8, 20, 0, 70))
+            shade.setColorAt(1.0, QColor(8, 20, 0, 0))
+            p.setBrush(shade)
             p.drawEllipse(c, rx, ry)
             # pupil: travels far inside the eye, converges for a close cursor,
             # dilates when he's interested
@@ -996,13 +1050,34 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             py = ey + ly * opened + 3.0 * pose.sleep * opened       # sleepy eyes sink
             p.setBrush(PUPIL)
             p.drawEllipse(QPointF(px, py), prx, pry)
+            # a soft lime bounce inside the bottom of the pupil: wet, deep eyes
+            bounce = QRadialGradient(QPointF(px, py + pry * 0.95), pry * 0.9)
+            bounce.setColorAt(0.0, QColor(150, 200, 80, 44))
+            bounce.setColorAt(1.0, QColor(150, 200, 80, 0))
+            p.setBrush(bounce)
+            p.drawEllipse(QPointF(px, py), prx, pry)
             if opened > 0.55:
                 # highlights stay where the light is: the eye looks glossy
-                # as the pupil moves under them
-                p.setBrush(QColor(255, 255, 255, 220))
-                p.drawEllipse(QPointF(ex - 5.2 * cf, ey - 7.5 * opened), 2.9 * cf, 2.9 * opened)
-                p.setBrush(QColor(255, 255, 255, 95))
-                p.drawEllipse(QPointF(ex + 4.0 * cf, ey + 6.0 * opened), 1.2 * cf, 1.2)
+                # as the pupil moves under them. A big one, a small one, and
+                # they twinkle a little when he's delighted
+                tw = 1.0 + 0.16 * pose.sparkle * math.sin(pose.t * 11 + side)
+                p.setBrush(QColor(255, 255, 255, 235))
+                p.drawEllipse(QPointF(ex - 5.4 * cf, ey - 7.6 * opened),
+                              3.3 * cf * tw, 3.3 * opened * tw)
+                p.setBrush(QColor(255, 255, 255, 150))
+                p.drawEllipse(QPointF(ex + 4.4 * cf, ey + 6.4 * opened), 1.6 * cf, 1.6)
+                if pose.sparkle > 0.05:               # delighted: a tiny star glint
+                    a_ = int(230 * min(1.0, pose.sparkle))
+                    gx, gy = ex + 5.6 * cf, ey - 3.0 * opened
+                    r_ = (2.6 + 0.9 * math.sin(pose.t * 9 + side * 2)) * pose.sparkle
+                    star = QPainterPath(QPointF(gx, gy - r_))
+                    for q in range(1, 8):
+                        ang = -math.pi / 2 + q * math.pi / 4
+                        rr = r_ if q % 2 == 0 else r_ * 0.32
+                        star.lineTo(QPointF(gx + math.cos(ang) * rr * cf, gy + math.sin(ang) * rr))
+                    star.closeSubpath()
+                    p.setBrush(QColor(255, 255, 255, a_))
+                    p.drawPath(star)
             p.restore()
             if lid > 0.02:                                   # soft dark lid edge
                 edge = QPainterPath(QPointF(ex - rx, lid_y - slant))
