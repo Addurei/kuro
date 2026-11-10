@@ -49,6 +49,22 @@ Tick each line; note anything odd with the time it happened, then share
 - [ ] Empty chat: three suggestion buttons; tapping one sends it
 - [ ] Right-click menu: icons swell under the cursor, fold away when you pick one
 
+## New abilities
+- [ ] "What's 15% of 240?" → 36. "5 feet in cm" → 152.4
+- [ ] "Add buy cat food and finish chapter 2 to my list", "what's on my list?", "tick off the cat food"
+- [ ] "Write a short poem and save it as poem.txt on my desktop": the file appears; ask again, you get poem (2).txt
+- [ ] "When I say study mode, open Notepad and start a 25 minute focus", then "study mode": both happen
+- [ ] "Why is my PC slow?": names real apps from Task Manager
+- [ ] "Close Notepad": he asks first; Allow closes it (Notepad offers to save if you typed)
+- [ ] "Tidy my downloads": the dialog shows the counts; Allow sorts them; "undo that" puts them back
+- [ ] "Dark mode on" / "dark mode off". "Brightness 40" (laptop screen)
+- [ ] Unplug a laptop under 20%: one warning bubble, not repeated until plugged in again
+
+## Looks
+- [ ] He reads as a solid little figure: lit from the upper left, a cool rim on the lower right, eyes set into his face with shade at the top
+- [ ] No lime line running round the chat or settings panel
+- [ ] Settings → AI & Voice: one plain list of brains, the chosen one's key under it
+
 ## Focus & sleep
 - [ ] Right-click → FOCUS: he goes to the taskbar, dozes off (heavy eyes, then closed), nose bubble + blep
 - [ ] Break and end of session messages

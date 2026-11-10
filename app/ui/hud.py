@@ -24,9 +24,8 @@ import textwrap
 import threading
 
 from PySide6.QtCore import (QEasingCurve, QElapsedTimer, QEvent, QPoint, QPointF,
-                            QPropertyAnimation, QRectF, QVariantAnimation,
-                            Qt, QTimer, Signal)
-from PySide6.QtGui import (QColor, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen,
+                            QRectF, QVariantAnimation, Qt, QTimer, Signal)
+from PySide6.QtGui import (QColor, QFont, QGuiApplication, QKeySequence, QPainter, QPainterPath, QPen,
                            QRadialGradient)
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider,
@@ -860,73 +859,104 @@ def _rgba(hex_: str, alpha: float) -> str:
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
 
 
-class BrainRow(QFrame):
-    """One brain in the picker. Compact (badge, name, tag, status) until it's
-    the chosen one; then its one-line description shows too."""
+class BrainOption(QWidget):
+    """One brain in the picker: a radio dot, its name, one quiet word about it
+    (free / paid / offline) and, on the right, "backup" if it would step in.
+    Nothing else. The chosen one's key lives in a single row under the list."""
     picked = Signal(str)
 
     def __init__(self, name: str):
         super().__init__()
         self.name = name
-        pre = P.PRESETS[name]
-        self.setObjectName("brainrow")
+        self.label = P.PRESETS[name]["label"]
+        self.tag = P.TAG.get(name, P.PRESETS[name].get("tag", ""))
+        self.selected = False
+        self.note = ""
+        self._hover = 0.0
+        self._sel = 0.0
+        self.setFixedHeight(31)
         self.setCursor(Qt.PointingHandCursor)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(9, 6, 9, 6)
-        lay.setSpacing(9)
-        accent = P.ACCENT.get(name, LIME_HEX)
-        badge = QLabel(pre["label"][0])
-        badge.setFixedSize(24, 24)
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(f"background: {_rgba(accent, 0.13)}; color: {accent};"
-                            f" border: 1px solid {_rgba(accent, 0.4)};"
-                            " border-radius: 12px; font-weight: 700; font-size: 9pt;")
-        lay.addWidget(badge, 0, Qt.AlignTop)
-        col = QVBoxLayout()
-        col.setSpacing(1)
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        self.title = QLabel(pre["label"])
-        self.title.setStyleSheet(f"color: {TEXT_HEX}; font-size: 9.5pt; font-weight: 600;"
-                                 " background: transparent;")
-        top.addWidget(self.title)
-        tag = pre.get("badge") or P.TAG.get(name, "")
-        self.tag = QLabel(tag)
-        self.tag.setStyleSheet(f"color: {LIME_HEX if pre.get('badge') else DIM_HEX};"
-                               " font-size: 7.5pt; background: transparent;")
-        top.addWidget(self.tag)
-        top.addStretch()
-        col.addLayout(top)
-        self.blurb = QLabel(P.BLURB.get(name, ""))
-        self.blurb.setWordWrap(True)
-        self.blurb.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; background: transparent;")
-        col.addWidget(self.blurb)
-        lay.addLayout(col, 1)
-        self.status = QLabel("")
-        self.status.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.status, 0, Qt.AlignVCenter)
-        self.set_state(False, "")
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setAccessibleName(self.label)
+        self._hover_anim = QVariantAnimation(self, duration=140, easingCurve=QEasingCurve.OutCubic)
+        self._hover_anim.valueChanged.connect(self._set_hover)
+        self._sel_anim = QVariantAnimation(self, duration=200, easingCurve=QEasingCurve.OutBack)
+        self._sel_anim.valueChanged.connect(self._set_sel)
 
-    def set_state(self, selected: bool, status: str) -> None:
-        self.blurb.setVisible(selected)
-        border = LIME_HEX if selected else "#1d1f24"
-        bg = "#161911" if selected else "#121317"
-        self.setStyleSheet(f"QFrame#brainrow {{ background: {bg}; border: 1px solid {border};"
-                           " border-radius: 11px; }")
-        styles = {"In use": ("#0e0f12", LIME_HEX, LIME_HEX),
-                  "Backup": (LIME_HEX, "transparent", _rgba(LIME_HEX, 0.45)),
-                  "Key saved": (TEXT_HEX, "transparent", "#3a3d45"),
-                  "Local": (TEXT_HEX, "transparent", "#3a3d45"),
-                  "Add key": (DIM_HEX, "transparent", "#2a2c32")}
-        fg, bgc, bd = styles.get(status, (DIM_HEX, "transparent", "#2a2c32"))
-        self.status.setText(status)
-        self.status.setVisible(bool(status))
-        self.status.setStyleSheet(f"color: {fg}; background: {bgc}; border: 1px solid {bd};"
-                                  " border-radius: 7px; padding: 1px 7px; font-size: 7.5pt;")
+    def _set_hover(self, v) -> None:
+        self._hover = float(v)
+        self.update()
+
+    def _set_sel(self, v) -> None:
+        self._sel = float(v)
+        self.update()
+
+    def _run(self, anim: QVariantAnimation, start: float, end: float) -> None:
+        anim.stop()
+        anim.setStartValue(float(start))
+        anim.setEndValue(float(end))
+        anim.start()
+
+    def set_state(self, selected: bool, note: str, animate: bool = True) -> None:
+        changed = selected != self.selected
+        self.selected, self.note = selected, note
+        if changed and animate and self.isVisible():
+            self._run(self._sel_anim, self._sel, 1.0 if selected else 0.0)
+        else:
+            self._sel_anim.stop()
+            self._sel = 1.0 if selected else 0.0
+        self.update()
+
+    def enterEvent(self, e) -> None:
+        self._run(self._hover_anim, self._hover, 1.0)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._run(self._hover_anim, self._hover, 0.0)
+        super().leaveEvent(e)
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.LeftButton:
             self.picked.emit(self.name)
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect())
+        sel = max(0.0, min(1.2, self._sel))
+        if self._hover > 0.01:                       # a soft wash under the cursor
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(255, 255, 255, int(13 * self._hover)))
+            p.drawRoundedRect(r.adjusted(-6, 2, 6, -2), 8, 8)
+        # radio
+        c = QPointF(8.5, r.center().y())
+        ring = QColor("#3d4049")
+        lime = QColor(LIME_HEX)
+        k = min(1.0, sel)
+        ring = QColor(int(ring.red() + (lime.red() - ring.red()) * k),
+                      int(ring.green() + (lime.green() - ring.green()) * k),
+                      int(ring.blue() + (lime.blue() - ring.blue()) * k))
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(ring, 1.5))
+        p.drawEllipse(c, 6.2, 6.2)
+        if sel > 0.02:
+            p.setPen(Qt.NoPen)
+            p.setBrush(lime)
+            p.drawEllipse(c, 3.3 * sel, 3.3 * sel)
+        # name, then its one-word tag
+        f = theme.sans(9.5)
+        f.setWeight(QFont.DemiBold if self.selected else QFont.Normal)
+        p.setFont(f)
+        p.setPen(QColor(TEXT_HEX))
+        x = 25.0
+        p.drawText(QRectF(x, 0, r.width() - x, r.height()), Qt.AlignVCenter | Qt.AlignLeft, self.label)
+        x += p.fontMetrics().horizontalAdvance(self.label) + 8
+        p.setFont(theme.sans(8))
+        p.setPen(QColor(DIM_HEX))
+        p.drawText(QRectF(x, 1, r.width() - x, r.height()), Qt.AlignVCenter | Qt.AlignLeft, self.tag)
+        if self.note:
+            p.drawText(QRectF(0, 1, r.width() - 2, r.height()), Qt.AlignVCenter | Qt.AlignRight,
+                       self.note)
 
 
 class HotkeyButton(QPushButton):
@@ -1184,28 +1214,22 @@ class SettingsPage(QWidget):
 
     def _tab_ai(self) -> QWidget:
         w, lay = self._page()
-        # brain picker: a list of brains; the chosen one opens up with its key
+        # one card: the brains as a plain list, then the chosen one's key
+        brain = Card()
         picker = QWidget()
-        self.brain_list = QVBoxLayout(picker)
-        self.brain_list.setContentsMargins(0, 0, 0, 0)
-        self.brain_list.setSpacing(6)
-        self.brain_rows: dict[str, BrainRow] = {}
+        pl = QVBoxLayout(picker)
+        pl.setContentsMargins(0, 4, 0, 4)
+        pl.setSpacing(0)
+        self.brain_rows: dict[str, BrainOption] = {}
         names = P.ORDER + (["cloud"] if getattr(self.s, "cloud_url", "") else [])
         for name in names:
-            row = BrainRow(name)
+            row = BrainOption(name)
             row.picked.connect(self._pick_brain)
             self.brain_rows[name] = row
-            self.brain_list.addWidget(row)
+            pl.addWidget(row)
+        brain.add(picker)
 
-        # the details that open under the chosen brain
-        self.detail = QFrame()
-        self.detail.setObjectName("braindetail")
-        self.detail.setStyleSheet("QFrame#braindetail { background: #0f1013; border: 1px solid #1d1f24;"
-                                  " border-radius: 10px; }")
-        dl = QVBoxLayout(self.detail)
-        dl.setContentsMargins(12, 4, 12, 8)
-        dl.setSpacing(0)
-        self.key = InlineEdit("", "paste key", 150, secret=True)
+        self.key = InlineEdit("", "paste key", 138, secret=True)
         self.key.editingFinished.connect(self._key_edited)
         self.test_btn = QPushButton("Test")
         self.test_btn.setObjectName("seg")
@@ -1217,20 +1241,23 @@ class SettingsPage(QWidget):
         kr.setSpacing(6)
         kr.addWidget(self.key)
         kr.addWidget(self.test_btn)
-        self.key_row = _row("Key", keyrow)
-        self.key_label = self.key_row.findChildren(QLabel)[0]
-        dl.addWidget(self.key_row)
+        # "Groq key  [••••••] [Test]" and, under it, where to get one
+        self.key_row = QWidget()
+        kv = QVBoxLayout(self.key_row)
+        kv.setContentsMargins(0, 8, 0, 9)
+        kv.setSpacing(3)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self.key_label = QLabel("Key")
+        self.key_label.setStyleSheet(f"color: {TEXT_HEX}; font-size: 9.5pt; background: transparent;")
+        top.addWidget(self.key_label, 1)
+        top.addWidget(keyrow, 0, Qt.AlignVCenter)
+        kv.addLayout(top)
         self.result = QLabel("")
         self.result.setOpenExternalLinks(True)
         self.result.setWordWrap(True)
-        dl.addWidget(self.result)
-        self._detail_anim = QPropertyAnimation(self.detail, b"maximumHeight", self)
-        self._detail_anim.setDuration(220)
-        self._detail_anim.setEasingCurve(QEasingCurve.OutCubic)
-
-        self.backup_note = QLabel("")
-        self.backup_note.setWordWrap(True)
-        self.backup_note.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 6px 4px 0 4px;")
+        kv.addWidget(self.result)
+        brain.add(self.key_row)
 
         voice = Card()
         voice.add(self._toggle("speak_replies", "Speak replies"))
@@ -1245,8 +1272,7 @@ class SettingsPage(QWidget):
         voice.add(self._toggle("wake_word", "“Hey Kuro”", "Talk to him hands-free"))
 
         lay.addWidget(_section("BRAIN"))
-        lay.addWidget(picker)
-        lay.addWidget(self.backup_note)
+        lay.addWidget(brain)
         lay.addWidget(_section("VOICE"))
         lay.addWidget(voice)
         self._voice_rows(self.s.speak_replies)
@@ -1278,27 +1304,18 @@ class SettingsPage(QWidget):
         self._set(attr, value)
 
     def _brain_status(self, name: str) -> str:
-        has_key = bool(self.s.key_for(name).strip())
-        if name == self.s.provider:
-            return "In use"
-        if name in P.backups(self.s):
-            return "Backup"
-        if name == "ollama":
-            return "Local"
-        return "Key saved" if has_key else "Add key"
+        """The one thing worth saying beside a brain that isn't the chosen
+        one: whether it would step in if the chosen one runs out."""
+        if name != self.s.provider and name in P.backups(self.s):
+            return "backup"
+        return ""
 
     def _show_brain(self, note: str = "", animate: bool = False) -> None:
-        """Reflect the chosen brain: highlight its row, open its details
-        right under it, and show every other brain's status."""
+        """Reflect the chosen brain: mark its row, and point the key row at it."""
         name = self.s.provider if self.s.provider in P.PRESETS else "gemini"
         pre = P.PRESETS[name]
         for n, row in self.brain_rows.items():
-            row.set_state(n == name, self._brain_status(n))
-        self._backup_note()
-        # move the details under the chosen row
-        self.brain_list.removeWidget(self.detail)
-        idx = list(self.brain_rows).index(name) if name in self.brain_rows else 0
-        self.brain_list.insertWidget(idx + 1, self.detail)
+            row.set_state(n == name, self._brain_status(n), animate)
         self.key.setVisible(pre["needs_key"])
         self.key_label.setText(f"{pre['label']} key" if pre["needs_key"] else "No key needed")
         self.key.setText(self.s.key_for(name))
@@ -1307,16 +1324,7 @@ class SettingsPage(QWidget):
         link = (f' · <a style="color:{LIME_HEX}; text-decoration:none" '
                 f'href="{pre["key_url"]}">{verb} ↗</a>') if pre["key_url"] else ""
         self.result.setText(f'{html.escape(note or pre["key_hint"])}{link}')
-        self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 0 0 8px 0;")
-        self.detail.show()
-        full = self.detail.sizeHint().height()
-        if animate:                                   # slide open under the new choice
-            self._detail_anim.stop()
-            self._detail_anim.setStartValue(0)
-            self._detail_anim.setEndValue(full)
-            self._detail_anim.start()
-        else:
-            self.detail.setMaximumHeight(full)
+        self.result.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; background: transparent;")
 
     def _pick_brain(self, name: str) -> None:
         if name == self.s.provider:
@@ -1348,17 +1356,6 @@ class SettingsPage(QWidget):
         name = self.s.provider
         for n, row in getattr(self, "brain_rows", {}).items():
             row.set_state(n == name, self._brain_status(n))
-        self._backup_note()
-
-    def _backup_note(self) -> None:
-        if not hasattr(self, "backup_note"):
-            return
-        names = [P.PRESETS[n]["label"] for n in P.backups(self.s)]
-        self.backup_note.setText(
-            f"If {P.PRESETS[self.s.provider]['label']} runs out, {' then '.join(names)} "
-            "takes over." if names else
-            f"Tip: add a free {'Gemini' if self.s.provider == 'groq' else 'Groq'} key too, "
-            "as a backup.")
 
     def _tab_focus(self) -> QWidget:
         w, lay = self._page()
@@ -1472,7 +1469,7 @@ class SettingsPage(QWidget):
         self.test_btn.setEnabled(True)
         self.result.setText(html.escape(text).replace("\n", "<br>"))
         self.result.setStyleSheet(f"color: {LIME_HEX if ok else theme.DANGER_HEX}; "
-                                  f"font-size: 8pt; padding: 0 0 8px 0;")
+                                  f"font-size: 8pt; background: transparent;")
 
 
 class StudyPage(QWidget):
@@ -1931,6 +1928,7 @@ class Hud(QWidget):
         self._bubble_timer = QTimer(self, singleShot=True, timeout=self._bubble_done)
         self._clock = QElapsedTimer()
         self._clock.start()
+        self._look = None                         # what was last painted (see _tick)
         self._t = 0.0
         self._frame = QTimer(self, interval=16, timeout=self._tick)
         self._frame.setTimerType(Qt.PreciseTimer)
@@ -2088,12 +2086,17 @@ class Hud(QWidget):
             self._frame.stop()
             self.hide()
             return
-        # 60 fps while morphing, 30 once settled (the comet border is slow)
+        # 60 fps while morphing, 30 once settled; and nothing is repainted
+        # unless the panel actually looks different from the last frame
         moving = abs(self.w.vel) + abs(self.h.vel) > 4 or abs(self.alpha.vel) > 0.05
         want = 16 if moving else 33
         if self._frame.interval() != want:
             self._frame.setInterval(want)
-        self.update()
+        look = (round(self.w.value, 1), round(self.h.value, 1), round(self.alpha.value, 3),
+                self.mapFromGlobal(self.cat.head_anchor()).x(), self.below, self.page)
+        if look != self._look:
+            self._look = look
+            self.update()
 
     def paintEvent(self, _e) -> None:
         a = max(0.0, min(1.0, self.alpha.value))
@@ -2122,15 +2125,10 @@ class Hud(QWidget):
         shape = path.united(tri)
         theme.paint_matte(p, shape)
 
-        # the running light
-        color = theme.RED if self.page == "confirm" else theme.LIME
-        speed = 0.42 if (self.busy or self.page == "confirm") else 0.13
-        head = (self._t * speed) % 1.0
-        border = QPainterPath()
-        border.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
-        theme.paint_comet(p, border, head, color, 0.16 if self.page != "bubble" else 0.24)
-        if self.busy or self.page == "confirm":
-            theme.paint_comet(p, border, (head + 0.5) % 1.0, color, 0.16)
+        if self.page == "confirm":               # asking before something risky: a still red edge
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(theme.with_alpha(theme.RED, 0.55), 1.2))
+            p.drawPath(shape)
 
 
 # ================================================================ radial menu

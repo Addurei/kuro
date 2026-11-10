@@ -25,6 +25,7 @@ from .memory import HabitLog, MemoryStore, Reflector
 from .music import MusicWatcher, is_music as _music_like
 from . import providers
 from .reminders import ReminderStore
+from .skills import build_skills
 from .tools import Tool, build_tools
 from .ui import theme
 from .ui.cat import CatWidget
@@ -65,6 +66,17 @@ class Signals(QObject):
     google_status = Signal(bool, str)
     wake = Signal(str)
     brain_switched = Signal(str, str)
+
+
+def battery_alert(bat, warned: int) -> int | None:
+    """Which warning level (20 or 10) to give now, or None. `warned` is the
+    lowest level already given since the charger was last in."""
+    if bat is None or bat.power_plugged:
+        return None
+    for level in (10, 20):
+        if bat.percent <= level:
+            return level if warned > level else None
+    return None
 
 
 class _ConfirmJob:
@@ -116,6 +128,10 @@ class Controller(FeaturesMixin):
                                  music=lambda: self.music.current,
                                  seek=self.music.seek,
                                  scan=self._scan_pc, scan_fx=self.sig.scan_fx.emit)
+        more, self.todo, self.routines = build_skills(d)
+        for tool in more:
+            self.tools[tool.name] = tool
+        self._battery_warned = 100               # lowest level already mentioned
         self._init_features_model(d)
         self.brain = Brain(settings, self.tools, confirm=self._confirm_from_worker,
                            notify=self.sig.tool_used.emit, context=self._context,
@@ -328,6 +344,14 @@ class Controller(FeaturesMixin):
                 extra.append(f"{u} has been {cur.kind} for about {self.tracker.minutes} min"
                              + (f" ({what})." if what else ".")
                              + " Tailor help to that when it fits.")
+        names = self.routines.names()
+        if names:
+            extra.append("Saved routines (when the user says one of these names, run it with "
+                         f"the routine tool): {', '.join(names)}.")
+        left = self.todo.open_count()
+        if left:
+            extra.append(f"{u}'s to-do list has {left} thing{'s' if left != 1 else ''} on it "
+                         "(use the todo tool to read it).")
         return context_prompt(self.s, self.memory.prompt_block(query=self._last_query),
                               self.habits.summary(),
                               "\n\n".join(extra))
@@ -591,11 +615,32 @@ class Controller(FeaturesMixin):
             self.tray.showMessage(f"{self.s.cat_name} reminds you", r.message)
         self._maybe_suggest()
         self._maybe_reflect_idle()
+        self._battery_watch()
         idle_min = (time.monotonic() - self.last_activity) / 60
         if (idle_min >= self.s.sleep_after_minutes and not self.busy
                 and self.cat.state == "idle" and self.cat.mode == "rest"
                 and not self.hud.is_open()):
             self.cat.set_state("sleeping")
+
+    def _battery_watch(self) -> None:
+        """A laptop about to die takes your work with it: he says so once at
+        20% and once more at 10%, and not again until it has been plugged in."""
+        try:
+            import psutil
+            bat = psutil.sensors_battery()
+        except Exception:
+            return
+        level = battery_alert(bat, self._battery_warned)
+        if level is None:
+            if bat is not None and (bat.power_plugged or bat.percent > 25):
+                self._battery_warned = 100
+            return
+        self._battery_warned = level
+        if self.busy or self.hud.is_open():
+            return
+        self.hud.say(t(self.s, "battery_low", pct=int(bat.percent)), seconds=8)
+        self.cat.react("surprised", 1.2)
+        self.cat.hop(120)
 
     def _react_to_activity(self) -> None:
         """Glasses while you code, a pencil while you write, a beret in Blender;

@@ -51,6 +51,14 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 - **Google Calendar + Gmail** (optional): see and add events (adding asks first), read your inbox. Gmail is read-only: he can never send, delete or change mail.
 - **Knows what you're doing** (from the app and window title only, never what's inside): glasses when you code or study, a pencil behind his ear when you write, a beret in Blender / design apps. His paws tap along when you type (he counts key presses, never which keys). Now and then a short line about it ("Working on Kuro again?"), at most one every 15 minutes, never during focus or fullscreen. Turn it off: Settings → General → React to what I'm doing.
 - **Reminders** that survive restarts.
+- **Sums and conversions done exactly**: "15% of 240", "5 ft in cm". He uses a calculator, never guesses.
+- **To-do list**: "add buy cat food to my list", "what's on my list?", "tick off the thesis one".
+- **Saves what he writes**: "write that as notes.txt on my desktop". Never overwrites a file, and can't create programs or scripts.
+- **Routines**: "when I say study mode, open VS Code, play lofi and focus for 25 minutes". Then just say "study mode".
+- **Why is my PC slow?**: which apps are eating memory and CPU, and "close Chrome" (he asks first).
+- **Tidy a folder**: "tidy my downloads" sorts loose files into Images, Documents, Videos... Shows the plan and asks first, deletes nothing, and "undo that" puts everything back.
+- **Dark mode and brightness**: "dark mode on", "brightness 40" (brightness on laptop screens).
+- **Battery warning**: tells you once at 20% and once at 10% when you're unplugged.
 - **Learns about you** (Right-click → Memory to review or forget).
 - **Teleports** around your screens now and then (5 styles), and **hides during fullscreen** games and videos, holding any messages until you're back.
 
@@ -124,3 +132,4 @@ Never ship your own API key inside the app; anyone can extract it. Either users 
 
 - `run.bat` slims Kuro's libraries after every install: unused Qt parts (Designer, QML, PDF, translations, dev tools; about 160 MB) are moved aside, Qt is test-started, and only then deleted (restored if anything fails). Old packages he no longer needs (pyttsx3 + pywin32, python-docx + lxml) are uninstalled.
 - He draws at 60 fps only while something moves fast, 30 while idle, 20 asleep, and nearly stops while hidden.
+- His skull (the costliest thing to shade) is painted once and re-used until he turns his head or blinks; the chat panel only repaints when it changes.

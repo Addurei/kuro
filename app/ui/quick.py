@@ -2,7 +2,7 @@
 anywhere and press the hotkey. Same matte HUD look as the chat."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QCursor, QGuiApplication, QPainter, QPainterPath
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QScrollArea, QFrame,
                                QVBoxLayout, QWidget)
@@ -28,8 +28,6 @@ class QuickPanel(QWidget):
         self.setFixedSize(W, H)
         self.result_text = ""
         self.current = ""
-        self._t = 0.0
-        self._timer = QTimer(self, interval=33, timeout=self._step)
 
         title = QLabel("Quick actions")
         title.setFont(theme.sans(10, bold=True))
@@ -105,7 +103,6 @@ class QuickPanel(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        self._timer.start()
 
     def set_loading(self) -> None:
         self.dots.show()
@@ -137,12 +134,6 @@ class QuickPanel(QWidget):
         y = min(max(c.y() + 14, scr.top() + 6), scr.bottom() - H - 6)
         self.move(QPoint(int(x), int(y)))
 
-    def _step(self) -> None:
-        self._t += 0.033
-        if not self.isVisible():
-            self._timer.stop()
-        self.update()
-
     def keyPressEvent(self, e) -> None:
         if e.key() == Qt.Key_Escape:
             self.hide()
@@ -156,4 +147,3 @@ class QuickPanel(QWidget):
         path = QPainterPath()
         path.addRoundedRect(r, 16, 16)
         theme.paint_matte(p, path)
-        theme.paint_comet(p, path, (self._t * 0.13) % 1.0, theme.LIME, 0.16)

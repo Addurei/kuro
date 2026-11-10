@@ -5,8 +5,7 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath,
-                           QPen, QRadialGradient)
+from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen)
 
 LIME = QColor(186, 226, 92)
 RED = QColor(255, 93, 108)
@@ -71,34 +70,6 @@ def paint_matte(p: QPainter, path: QPainterPath) -> None:
     p.setBrush(Qt.NoBrush)
     p.setPen(QPen(QColor(255, 255, 255, 18), 1))
     p.drawPath(path)
-    p.restore()
-
-
-def paint_comet(p: QPainter, path: QPainterPath, head: float, color: QColor,
-                length: float = 0.18, width: float = 1.2) -> None:
-    """A light that runs along `path`: bright head, fading tail, soft glow.
-    `head` is 0..1 around the outline."""
-    p.save()
-    p.setRenderHint(QPainter.Antialiasing)
-    n = 48
-    for i in range(n):
-        t0 = (head - length * i / n) % 1.0
-        t1 = (head - length * (i + 1) / n) % 1.0
-        if t1 > t0:                        # wrapped past the start: skip the seam
-            continue
-        a = (1 - i / n) ** 1.6
-        p0, p1 = path.pointAtPercent(t0), path.pointAtPercent(t1)
-        p.setPen(QPen(with_alpha(color, 0.10 * a), width * 2.6, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(p0, p1)
-        p.setPen(QPen(with_alpha(color, 0.75 * a), width, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(p0, p1)
-    tip = path.pointAtPercent(head % 1.0)
-    g = QRadialGradient(tip, 4.5)
-    g.setColorAt(0, with_alpha(color, 0.45))
-    g.setColorAt(1, with_alpha(color, 0.0))
-    p.setPen(Qt.NoPen)
-    p.setBrush(g)
-    p.drawEllipse(tip, 4.5, 4.5)
     p.restore()
 
 

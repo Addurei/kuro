@@ -21,18 +21,30 @@ import math
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen,
+from PySide6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
                            QRadialGradient, QTransform)
 
 
 FUR = QColor(10, 10, 12)
-FUR_FAR = QColor(27, 27, 32)           # far-side limbs: a touch lighter = depth
+FUR_FAR = QColor(27, 27, 32)           # (kept for callers) far-side limbs
+# Kuro is lit like a vinyl figure: one soft key light up and to his left, a
+# cool rim light from behind on the right. Black fur can't get darker, so
+# the lit side lifts toward a blue-charcoal and the shadows stay true black.
+LIT = QColor(94, 98, 124)              # where the key light lands
+MID = QColor(42, 43, 56)
+SHADE = QColor(16, 16, 21)
+DEEP = QColor(3, 3, 5)
+RIM_COOL = QColor(126, 142, 200)       # the rim light
+RIM_FUR = QColor(92, 104, 150)         # black fur where that rim light grazes it
+RIM_LIMB = QColor(60, 68, 100)         # the same, fainter, on his legs
+LIGHT_DIR = (-0.42, -0.52)             # toward the key light (screen space)
 RIM = QColor(255, 255, 255, 36)        # faint outline so he reads on dark wallpapers
 INNER_EAR = QColor(238, 238, 242)
 EYE = QColor(186, 226, 92)             # Kuro's lime green
-IRIS_LIGHT = QColor(222, 246, 138)     # where light pools at the bottom of the iris
-IRIS_DEEP = QColor(160, 208, 70)       # toward the rim
-IRIS_RIM = QColor(112, 160, 44)        # the thin dark ring that makes eyes look round
+IRIS_LIGHT = QColor(232, 250, 150)     # where light pools at the bottom of the iris
+IRIS_DEEP = QColor(128, 180, 52)       # toward the rim
+IRIS_RIM = QColor(62, 104, 26)         # the dark ring that makes eyes look round
+IRIS_SHADOW = QColor(52, 92, 22)       # the top of the iris, in the shadow of his brow
 PUPIL = QColor(3, 3, 5)
 
 HEAD_W, HEAD_H, HEAD_D = 46.0, 36.0, 40.0   # head ellipsoid radii (side, up, forward)
@@ -275,6 +287,10 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
 
     p.save()
     p.setRenderHint(QPainter.Antialiasing)
+    outer_tf = p.worldTransform()
+    dev = p.device()
+    dev_scale = (scale * math.hypot(outer_tf.m11(), outer_tf.m12())
+                 * (dev.devicePixelRatioF() if dev is not None else 1.0))
     p.translate(origin)
     p.scale(scale, scale)
 
@@ -283,9 +299,18 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     span = 30 + 18 * abs(math.sin(yaw)) * st
     ground = 1 - pose.airborne
     if ground > 0.02:
+        # a soft pool of shadow, darkest right under him where he touches the floor
+        p.save()
+        p.translate(0, 1.2)
+        p.scale(1.0, 0.17)
+        g = QRadialGradient(QPointF(0, 0), span * 1.25 * k)
+        g.setColorAt(0.0, QColor(0, 0, 0, int(150 * k * ground)))
+        g.setColorAt(0.45, QColor(0, 0, 0, int(92 * k * ground)))
+        g.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 0, 0, int(80 * k * ground)))
-        p.drawEllipse(QPointF(0, 1.0), span * k, 4.2 * k)
+        p.setBrush(g)
+        p.drawEllipse(QPointF(0, 0), span * 1.25 * k, span * 1.25 * k)
+        p.restore()
     if pose.airborne > 0.02:
         pulse = 0.75 + 0.25 * math.sin(pose.t * 3.1)
         g = QRadialGradient(QPointF(0, 1), span * 1.15)
@@ -342,6 +367,8 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
 
     torso = QPainterPath()
     torso.setFillRule(Qt.WindingFill)
+    torso_o = QPainterPath()                      # a hair bigger: his faint outline
+    torso_o.setFillRule(Qt.WindingFill)
     sy, cyaw = abs(math.sin(yaw)), abs(math.cos(yaw))
     n = 8
     for i in range(n + 1):
@@ -353,12 +380,14 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
         w = lerp(wh, wc, t) * waist
         x, _ = project(f, 0, yaw)
         _ellipse(torso, x, y, math.hypot(w * cyaw, r * sy) * (1 + 0.07 * jig), r)
+        _ellipse(torso_o, x, y, math.hypot(w * cyaw, r * sy) * (1 + 0.07 * jig) + 1.0, r + 1.0)
     body_depth = project((hf + cf) / 2, 0, yaw)[1]
 
     # ---- legs (IK) -----------------------------------------------------
     gp = _gait_params(pose.run)
     legs = []
     groom_paw = None              # a paw raised to his face is drawn in front of it
+    groom_at = (0.0, 0.0)
     contours = []                 # (centre, radius, start_deg, span_deg) for near haunch/shoulder
     paws: list[Paw] = []
     toes: list[tuple[float, float, float]] = []
@@ -427,8 +456,10 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
                     ) > body_depth * 0.0 - 0.01
             if front and side == near_side and (pose.paw_raise > 0.3 or pose.bat > 0.3):
                 groom_paw = shape
+                groom_at = (px, tgt[1])
             else:
-                legs.append((near, shape))
+                rx0, _ = project(root_f, s_off, yaw)
+                legs.append((near, shape, (rx0, root_y, px, tgt[1])))
             if near and sy > 0.45 and st > 0.3:
                 rx_, _ = project(root_f, s_off, yaw)
                 if front:                               # shoulder / elbow line
@@ -451,6 +482,9 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     x = y = 0.0
     tail = QPainterPath()
     tail.setFillRule(Qt.WindingFill)
+    tail_o = QPainterPath()
+    tail_o.setFillRule(Qt.WindingFill)
+    tail_line = QPainterPath(QPointF(tbx, tby))        # its centre line, for the highlight
     prev = (tbx, tby)
     for i in range(segs):
         frac = (i + 1) / segs
@@ -463,8 +497,13 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
             u = (q + 1) / 2
             r = lerp(6.2, 4.6, (i + u) / segs)
             _ellipse(tail, lerp(prev[0], cur[0], u), lerp(prev[1], cur[1], u), r, r)
+            if q:
+                _ellipse(tail_o, cur[0], cur[1], r + 1.0, r + 1.0)
+        if i < segs - 1:
+            tail_line.lineTo(QPointF(cur[0], cur[1]))
         prev = cur
     _ellipse(tail, tbx, tby, 6.2, 6.2)
+    _ellipse(tail_o, tbx, tby, 7.2, 7.2)
 
     # ---- head ----------------------------------------------------------
     hfh, hyh = tilt(lerp(2, pivot_f + 32, st) if st > 0 else 2, lerp(-74.0, -73.0, st))
@@ -481,13 +520,20 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     _ellipse(head_local, 0, 0, head_rx, HEAD_H)
     _ellipse(head_local, 5 * math.sin(psi), 9, head_rx * (1.05 - 0.07 * abs(math.sin(psi))),
              HEAD_H * 0.74)                      # cheeks sit toward his face
-    head = head_tf.map(head_local)
+    head_o = QPainterPath()                       # a hair bigger: his faint outline
+    head_o.setFillRule(Qt.WindingFill)
+    _ellipse(head_o, 0, 0, head_rx + 1.1, HEAD_H + 1.1)
+    _ellipse(head_o, 5 * math.sin(psi), 9, head_rx * (1.05 - 0.07 * abs(math.sin(psi))) + 1.1,
+             HEAD_H * 0.74 + 1.1)
+    head_o = head_tf.map(head_o)
 
-    ears_outer, ears_inner = [], []
+    # ---- ears. They swivel and twitch all the time, so they are worked out
+    # and painted every frame; the skull under them is cached (see below).
     turn_e = max(0.0, min(1.0, (abs(math.sin(psi)) - 0.8) / 0.17))   # only near side-on
     m_e = turn_e * turn_e * (3 - 2 * turn_e)
     d_e = 1.0 if psi >= 0 else -1.0
-    ear_order = []
+    ears = []                                    # (facing, outer, inner or None, how visible)
+    ear_roots = []                               # where each ear meets the skull (head space)
     for side in (-1, 1):
         phi = side * EAR_PHI
         ex, _, _ = on_head(phi, EAR_LAM, psi)
@@ -497,6 +543,7 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
         ey = -HEAD_H * math.sqrt(1 - u * u) + EAR_SINK
         front = math.cos(psi + math.radians(phi * 0.6))
         width = min(1.08, (0.35 + 0.65 * abs(front)) / EAR_FRONT)
+        ear_roots.append((ex, ey + 17.0, 17.0 * width))
         e = pose.ear
         tw = max(-16.0, min(16.0, pose.twitch_l if side < 0 else pose.twitch_r))
         deg = (e * 8 if e >= 0 else e * 13) + tw
@@ -509,70 +556,226 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
         t = (QTransform().translate(ex, ey + 15).rotate(lerp(deg * -side, deg * d_e, m_e))
              .translate(0, -15))
         local = t.map(_ear_path(m_e, mf, d_e, yk, True))
+        local.setFillRule(Qt.WindingFill)
         local.addEllipse(t.map(QPointF(2.0 * (1 if side < 0 else -1) * width, 13.0)),
                          15.0 * width, 9.0)              # soft fillet where ear meets head
         outer = head_tf.map(local)
-        ear_order.append((front, outer))
         vis = max(0.0, min(1.0, front * 3))
-        if vis > 0.02:
-            ears_inner.append((head_tf.map(t.map(_ear_path(m_e, mf, d_e, yk, False))), outer, vis))
-    ear_order.sort(key=lambda e_: e_[0])          # far ear painted first
-    ears_outer = [o for _f, o in ear_order]
-    # ears and head are ONE silhouette: one outline, no seams at the base
-    head_full = head
-    for o in ears_outer:
-        o.setFillRule(Qt.WindingFill)
-        head_full = head_full.united(o.simplified())
+        inner = head_tf.map(t.map(_ear_path(m_e, mf, d_e, yk, False))) if vis > 0.02 else None
+        ears.append((front, outer, inner, vis))
+    ears.sort(key=lambda e_: e_[0])               # far ear painted first
 
-    # ---- paint: rims first (outer silhouette only), then fills back-to-front
-    far_legs = [s for nr, s in legs if not nr]
-    near_legs = [s for nr, s in legs if nr]
-    fills = ([(s, FUR_FAR) for s in far_legs] + [(tail, FUR), (torso, FUR)]
-             + [(s, FUR) for s in near_legs])
-    # faint rim on the big shapes only (legs are thin and tucked under him;
-    # outlining their many little blobs was most of the frame cost)
-    p.setBrush(Qt.NoBrush)
-    p.setPen(QPen(RIM, 2.0))
-    for shape in (tail, torso, head_full):
-        p.drawPath(shape)
-    p.setPen(Qt.NoPen)
-    for shape, col in fills:
-        p.setBrush(col)
-        p.drawPath(shape)
-    p.setBrush(FUR)
-    p.drawPath(head_full)
-    # inner ears, then the skull again on top so they only show above the
-    # head line (cheaper than subtracting paths every frame)
-    if ears_inner:
-        for inner, _outer, vis in ears_inner:
-            col = QColor(INNER_EAR)
-            col.setAlphaF(vis)
-            p.setBrush(col)
+    def paint_ears():
+        for _front, outer, inner, vis in ears:
+            box = outer.boundingRect()
+            c = box.center()
+            grow = (QTransform().translate(c.x(), c.y())
+                    .scale(1 + 2.2 / max(1.0, box.width()), 1 + 2.2 / max(1.0, box.height()))
+                    .translate(-c.x(), -c.y()))
+            p.setBrush(RIM)                       # its share of his faint outline
+            p.drawPath(grow.map(outer))
+            p.setBrush(RIM_FUR)                   # cool rim along the edge away from the lamp
+            p.drawPath(outer.translated(1.2, 0.95))
+            # the back of the ear: lit toward the tip, falling into the skull's shade
+            eg = QLinearGradient(QPointF(c.x() - 4, box.top()), QPointF(c.x() + 3, box.bottom()))
+            eg.setColorAt(0.0, QColor(58, 60, 77))
+            eg.setColorAt(0.45, QColor(25, 25, 33))
+            eg.setColorAt(0.85, SHADE)
+            p.setBrush(eg)
+            p.drawPath(outer)
+            if inner is None:
+                continue
+            ibox = inner.boundingRect()
+            # the hollow of the ear: its far wall sits in shadow
+            p.setBrush(QColor(0, 0, 0, int(150 * vis)))
+            p.drawPath(inner.translated(-0.9, -0.7))
+            ig = QLinearGradient(ibox.topLeft(), QPointF(ibox.left(), ibox.bottom()))
+            tip, low, deep = QColor(INNER_EAR), QColor(214, 206, 228), QColor(120, 110, 148)
+            for col in (tip, low, deep):
+                col.setAlphaF(vis)
+            ig.setColorAt(0.0, tip)                # white at the tip...
+            ig.setColorAt(0.34, tip)
+            ig.setColorAt(0.6, low)                # ...lilac shade deeper in the ear
+            ig.setColorAt(0.9, deep)
+            ig.setColorAt(1.0, QColor(58, 50, 80, int(255 * vis)))
+            p.setBrush(ig)
             p.drawPath(inner)
-        p.setBrush(FUR)
+            # shadow across the hollow, cast by the ear's own near edge
+            sg = QLinearGradient(QPointF(ibox.right(), ibox.center().y()),
+                                 QPointF(ibox.left(), ibox.center().y()))
+            sg.setColorAt(0.0, QColor(30, 22, 52, int(78 * vis)))
+            sg.setColorAt(0.45, QColor(30, 22, 52, 0))
+            p.setBrush(sg)
+            p.drawPath(inner)
+
+    def skull_layer(p, tf):
+        """The skull and the form of his face: everything about his head that
+        only changes when he turns it or blinks. Painted through `tf`, so it
+        can go straight to the screen or into the cache."""
+        head = tf.map(head_local)
+        hc0 = tf.map(QPointF(0, 0))
+        head_r = HEAD_W * 1.12 * HEAD_SCALE
+        # light wraps his real outline: painted once in cool rim light, then
+        # again in place, which leaves a crisp crescent of rim along the edge
+        # facing away from the lamp. This is what lifts him off the screen.
+        p.setPen(Qt.NoPen)
+        p.setBrush(RIM_FUR)
+        p.drawPath(head.translated(1.2, 0.95))
+        p.setBrush(_ball(hc0, head_r))
         p.drawPath(head)
+        for rx_, ry_, rw_ in ear_roots:           # each ear shades the skull at its root
+            _occlude(p, None, tf.map(QPointF(rx_ + 1.5, ry_)), rw_, 8.0, 80)
+        # the underside of the head turns away from the light
+        jaw = QLinearGradient(QPointF(0, hc0.y() + HEAD_H * 0.2),
+                              QPointF(0, hc0.y() + HEAD_H * 0.98))
+        jaw.setColorAt(0.0, QColor(0, 0, 0, 0))
+        jaw.setColorAt(1.0, QColor(0, 0, 0, 150))
+        p.setBrush(jaw)
+        p.drawPath(head)
+        _rim(p, head, hc0, head_r * 0.92, 120)
+        # a soft glossy sheen across the crown, stretched the way fur lies
+        gx_, gy_, _gf = on_head(-22, 50, psi)
+        crown = tf.map(QPointF(gx_ - 5, gy_ + 1))
+        p.save()
+        p.setCompositionMode(QPainter.CompositionMode_SourceAtop)
+        p.translate(crown)
+        p.rotate(-24)
+        p.scale(1.0, 0.5)
+        g = QRadialGradient(QPointF(0, 0), 31)
+        g.setColorAt(0.0, QColor(214, 222, 255, 62))
+        g.setColorAt(0.45, QColor(214, 222, 255, 22))
+        g.setColorAt(1.0, QColor(214, 222, 255, 0))
+        p.setBrush(g)
+        p.drawEllipse(QPointF(0, 0), 31, 31)
+        p.restore()
+        p.save()
+        p.setTransform(tf, True)
+        p.setClipPath(head_local)
+        _face_form(p, pose, psi)
+        p.restore()
+
+    # ---- paint, back to front. Every part is shaded as its own rounded form
+    # and drops a soft shadow on whatever is behind it, so he reads as a little
+    # solid figure instead of one flat black cut-out.
+    far_legs = [(s_, at) for nr, s_, at in legs if not nr]
+    near_legs = [(s_, at) for nr, s_, at in legs if nr]
+    hc0 = head_tf.map(QPointF(0, 0))
+    bx0, _ = project((hf + cf) / 2, 0, yaw)
+    body_c = QPointF(bx0, (hy + cy) / 2 - 2)
+    body_r = 30 + 12 * st * sy
+    # faint outline on the big shapes so he still reads on dark wallpapers
+    p.setPen(Qt.NoPen)
+    p.setBrush(RIM)
+    p.drawPath(tail_o)
+    p.drawPath(torso_o)
+    p.drawPath(head_o)
+
+    def leg_form(shape, lift_):
+        """A limb as a soft cylinder: lit on the side facing the lamp, falling
+        to black across its width, a little darker toward the floor."""
+        box = shape.boundingRect()
+        g = QLinearGradient(QPointF(box.left() - 1, box.top()),
+                            QPointF(box.right() + 1, box.top() + box.width() * 0.5))
+        def mix(c, k):
+            return QColor(int(SHADE.red() + (c.red() - SHADE.red()) * k),
+                          int(SHADE.green() + (c.green() - SHADE.green()) * k),
+                          int(SHADE.blue() + (c.blue() - SHADE.blue()) * k))
+        g.setColorAt(0.0, mix(MID, lift_))
+        g.setColorAt(0.22, mix(LIT, lift_ * 0.8))
+        g.setColorAt(0.5, mix(MID, lift_))
+        g.setColorAt(0.8, SHADE)
+        g.setColorAt(1.0, DEEP)
+        return g
+
+    def cast(shape, strength=1.0):
+        """The soft shadow a part throws down and away from the light, on
+        whatever is behind it (three offset copies = a soft edge)."""
+        p.setCompositionMode(QPainter.CompositionMode_SourceAtop)   # only lands on him
+        p.setBrush(QColor(0, 0, 0, int(84 * strength)))
+        p.drawPath(shape.translated(1.1, 2.0))
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
+    # each paw presses a small dark contact shadow into the floor
+    if ground > 0.02:
+        for w_ in paws:
+            if w_.planted or pose.gait < 0.2:
+                g = QRadialGradient(QPointF(0, 0), 9.0)
+                g.setColorAt(0.0, QColor(0, 0, 0, int(120 * ground)))
+                g.setColorAt(1.0, QColor(0, 0, 0, 0))
+                p.save()
+                p.translate(w_.pos.x(), 0.6)
+                p.scale(1.0, 0.24)
+                p.setBrush(g)
+                p.drawEllipse(QPointF(0, 0), 9.0, 9.0)
+                p.restore()
+
+    for shape, at in far_legs:                    # far legs sit in the body's shadow
+        p.setBrush(leg_form(shape, 0.25))
+        p.drawPath(shape)
+
+    # tail: a round tube. Dark core, light along the side facing the lamp,
+    # a cool rim along the other
+    p.setBrush(SHADE)
+    p.drawPath(tail)
+    p.setBrush(Qt.NoBrush)
+    hl = QColor(LIT)
+    for width, alpha in ((6.4, 46), (2.6, 92)):
+        hl.setAlpha(alpha)
+        p.setPen(QPen(hl, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawPath(tail_line.translated(-1.2, -1.4))
+    cool = QColor(RIM_COOL)
+    for width, alpha, off in ((1.5, 96, 2.8),):
+        cool.setAlpha(alpha)
+        p.setPen(QPen(cool, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawPath(tail_line.translated(off * 0.75, off))
+    p.setPen(Qt.NoPen)
+    # ...and it goes into shadow where it tucks in behind his body
+    _occlude(p, tail, QPointF(tbx, tby), 17.0, 17.0, 200)
+
+    # torso: chest and belly as one soft ball
+    p.setBrush(_ball(body_c, body_r))
+    p.drawPath(torso)
+    _rim(p, torso, body_c, body_r * 0.86, 110)
+    # a fluffy chest: the fur there catches a little extra light
+    chx, _ = project(cf + 5, 0, yaw)
+    _sheen(p, torso, QPointF(chx - 3, cy + 3), 15.0, 20)
+    # ...in the shadow of his big head, and darker underneath
+    _occlude(p, torso, QPointF(hc0.x() + 2.5, hc0.y() + HEAD_H * HEAD_SCALE * 1.0),
+             HEAD_W * 0.98, 17.0, 235)
+    under = QLinearGradient(QPointF(0, -15), QPointF(0, 1))
+    under.setColorAt(0.0, QColor(0, 0, 0, 0))
+    under.setColorAt(1.0, QColor(0, 0, 0, 170))
+    p.setBrush(under)
+    p.drawPath(torso)
+
+    for shape, at in near_legs:                   # near legs: lit forms that shadow the body
+        cast(shape)
+        # the cool rim: the limb is painted once in rim light, then again
+        # nudged toward the lamp, leaving a crescent along its far edge
+        p.setBrush(RIM_LIMB)
+        p.drawPath(shape.translated(0.7, 0.45))
+        p.setBrush(leg_form(shape, 0.8))
+        p.drawPath(shape)
+        _sheen(p, shape, QPointF(at[2] - 2.8, at[3] - 3.6), 4.8, 34)     # puffy paw
+
+    paint_ears()
+    _paint_skull(p, pose, psi, skull_layer, head_local, (hxh + pose.head_dx, hyh), dev_scale)
 
     if toes and groom_paw is None:               # two tiny toe lines per front paw
-        a_t = int(120 * (1 - pose.gait) * (1 - st * 0.5))
+        a_t = int(150 * (1 - pose.gait) * (1 - st * 0.5))
         if a_t > 8:
-            p.setPen(QPen(QColor(70, 72, 82, a_t), 1.1, Qt.SolidLine, Qt.RoundCap))
+            p.setPen(QPen(QColor(0, 0, 0, a_t), 1.2, Qt.SolidLine, Qt.RoundCap))
             for tx, ty, tw_ in toes:
                 for dx in (-0.34, 0.34):
                     p.drawLine(QPointF(tx + dx * tw_, ty + 0.6), QPointF(tx + dx * tw_ * 1.06, ty + 3.6))
             p.setPen(Qt.NoPen)
 
-    # faint contour lines for the near thigh and shoulder: a cartoon trick
-    # so a black body still reads as having legs and haunches side-on
-    if contours:                    # soft light instead of lines: haunch/shoulder volume
-        a_ = int(18 * min(1.0, (sy - 0.45) * 3) * st)
+    # the near thigh and shoulder catch the light: a black body still reads
+    # as having legs and haunches side-on
+    if contours:
+        a_ = int(34 * min(1.0, (sy - 0.45) * 3) * st)
         for c_, r_, _start, _span in contours:
-            _sheen(p, torso, c_, r_ * 1.4, a_)
-    # key light on the back and crown, so the black reads as a volume
-    bx0, _ = project((hf + cf) / 2, 0, yaw)
-    _sheen(p, torso, QPointF(bx0 - 6, min(hy, cy) - rc * 0.8), 34, 16)
-    sx, sy_, _ = on_head(-25, 50, psi)
-    _sheen(p, head_full, head_tf.map(QPointF(sx, sy_)), 48, 24)
-
+            _sheen(p, torso, c_, r_ * 1.5, a_)
 
     p.save()
     p.setTransform(head_tf, True)
@@ -582,9 +785,13 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.restore()
 
     if groom_paw is not None:                     # paw up (grooming / batting)
-        p.setPen(QPen(RIM, 1.6))
-        p.setBrush(FUR)
-        p.drawPath(groom_paw.simplified())         # one clean outline, no seams
+        gp_ = groom_paw.simplified()               # one clean outline, no seams
+        p.setPen(QPen(QColor(0, 0, 0, 120), 3.0))  # its shadow on his face / chest
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(gp_)
+        p.setPen(QPen(RIM, 1.2))
+        p.setBrush(_ball(QPointF(groom_at[0], groom_at[1] - 4), 15, 0.8))
+        p.drawPath(gp_)
         p.setPen(Qt.NoPen)
 
     p.save()
@@ -618,15 +825,119 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     return [Paw(world.map(w.pos), w.planted, w.near) for w in paws], top
 
 
-def _sheen(p: QPainter, clip: QPainterPath, centre: QPointF, radius: float,
-           alpha: int) -> None:
+_HEAD_CACHE: dict = {}       # key -> (image, rect in head space)
+HEAD_CACHE_MAX = 10
+HEAD_CACHE_PX = 900          # bigger than this (huge previews): just paint it live
+
+
+def _paint_skull(p: QPainter, pose: Pose, psi: float, layer, head_local: QPainterPath,
+                 at: tuple[float, float], dev_scale: float) -> None:
+    """His skull is the most expensive thing to shade and it rarely changes:
+    it bobs and tilts far more often than it turns. So it is painted once into
+    an image, and that image is re-used (moved and tilted) until he actually
+    turns his head or blinks."""
+    tilt = (QTransform().translate(at[0], at[1])
+            .translate(0, 26).rotate(pose.head_tilt).translate(0, -26))
+    size = QTransform().scale(HEAD_SCALE, HEAD_SCALE)
+    key = (round(psi, 2), round(pose.eye_scale, 2), round(pose.eye_open, 1),
+           round(pose.happy, 1), round(pose.sleep, 1), round(dev_scale, 3))
+    hit = _HEAD_CACHE.pop(key, None)
+    if hit is None:
+        bounds = size.map(head_local).boundingRect()
+        rect = bounds.adjusted(-4, -4, 5, 5)      # room for the rim that peeks out
+        w, h = math.ceil(rect.width() * dev_scale), math.ceil(rect.height() * dev_scale)
+        if max(w, h) > HEAD_CACHE_PX or min(w, h) < 2:
+            layer(p, size * tilt)
+            return
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        ip = QPainter(img)
+        ip.setRenderHint(QPainter.Antialiasing)
+        ip.scale(w / rect.width(), h / rect.height())
+        ip.translate(-rect.left(), -rect.top())
+        layer(ip, size)
+        ip.end()
+        if len(_HEAD_CACHE) >= HEAD_CACHE_MAX:
+            _HEAD_CACHE.pop(next(iter(_HEAD_CACHE)))
+        hit = (img, rect)
+    _HEAD_CACHE[key] = hit                        # most recently used goes last
+    img, rect = hit
     p.save()
+    p.setTransform(tilt, True)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    p.drawImage(rect, img)
+    p.restore()
+
+
+def _ball(centre: QPointF, radius: float, lift: float = 1.0) -> QRadialGradient:
+    """Fur shaded as a rounded form: bright where the key light lands, falling
+    off to true black on the far side. `lift` scales how bright the lit side is."""
+    g = QRadialGradient(centre, radius, QPointF(centre.x() + LIGHT_DIR[0] * radius * 0.8,
+                                                centre.y() + LIGHT_DIR[1] * radius * 0.8))
+    def mix(c: QColor) -> QColor:
+        return QColor(int(SHADE.red() + (c.red() - SHADE.red()) * lift),
+                      int(SHADE.green() + (c.green() - SHADE.green()) * lift),
+                      int(SHADE.blue() + (c.blue() - SHADE.blue()) * lift))
+    half = QColor((LIT.red() + MID.red()) // 2, (LIT.green() + MID.green()) // 2,
+                  (LIT.blue() + MID.blue()) // 2)
+    g.setColorAt(0.0, mix(LIT))
+    g.setColorAt(0.16, mix(half))
+    g.setColorAt(0.40, mix(MID))
+    g.setColorAt(0.74, SHADE)
+    g.setColorAt(1.0, DEEP)
+    return g
+
+
+def _rim(p: QPainter, shape: QPainterPath, centre: QPointF, radius: float, alpha: int) -> None:
+    """Cool rim light hugging the edge of a form on the side away from the key
+    light: what separates a black shape from whatever is behind it."""
+    off = QPointF(centre.x() + LIGHT_DIR[0] * radius * 0.2, centre.y() + LIGHT_DIR[1] * radius * 0.2)
+    g = QRadialGradient(off, radius * 1.2)
+    c0, c1 = QColor(RIM_COOL), QColor(RIM_COOL)
+    c0.setAlpha(0)
+    c1.setAlpha(alpha)
+    g.setColorAt(0.0, c0)
+    g.setColorAt(0.80, c0)
+    g.setColorAt(1.0, c1)
+    p.setBrush(g)
+    p.drawPath(shape)
+
+
+def _occlude(p: QPainter, shape: QPainterPath | None, centre: QPointF, rx: float, ry: float,
+             alpha: int) -> None:
+    """A soft contact shadow where one part of him sits in front of another
+    and blocks the light. With a `shape` it falls on that shape only; without
+    one it lands on whatever has already been painted (cheaper, for small
+    shadows that stay inside him anyway)."""
+    p.save()
+    p.translate(centre)
+    p.scale(1.0, ry / rx)
+    g = QRadialGradient(QPointF(0, 0), rx)
+    g.setColorAt(0.0, QColor(0, 0, 0, alpha))
+    g.setColorAt(0.55, QColor(0, 0, 0, int(alpha * 0.55)))
+    g.setColorAt(1.0, QColor(0, 0, 0, 0))
+    p.setPen(Qt.NoPen)
+    p.setBrush(g)
+    if shape is None:
+        p.setCompositionMode(QPainter.CompositionMode_SourceAtop)
+        p.drawEllipse(QPointF(0, 0), rx, rx)
+    else:
+        inv = QTransform().scale(1.0, rx / ry).translate(-centre.x(), -centre.y())
+        p.drawPath(inv.map(shape))
+    p.restore()
+
+
+def _sheen(p: QPainter, clip: QPainterPath | None, centre: QPointF, radius: float,
+           alpha: int) -> None:
+    """A soft highlight, painted only on top of what is already there."""
+    p.save()
+    p.setCompositionMode(QPainter.CompositionMode_SourceAtop)
     g = QRadialGradient(centre, radius)
     g.setColorAt(0, QColor(255, 255, 255, alpha))
     g.setColorAt(1, QColor(255, 255, 255, 0))
     p.setBrush(g)
     p.setPen(Qt.NoPen)
-    p.drawPath(clip)
+    p.drawEllipse(centre, radius, radius)
     p.restore()
 
 
@@ -649,15 +960,76 @@ def _face(p: QPainter, pose: Pose, psi: float) -> None:
             g.setColorAt(1, QColor(BLUSH.red(), BLUSH.green(), BLUSH.blue(), 0))
             p.setBrush(g)
             p.drawEllipse(QPointF(bx, by), 9 * min(1.0, f + 0.3), 5.5)
+    _face_features(p, pose, psi)
+
+
+def _face_form(p: QPainter, pose: Pose, psi: float) -> None:
+    """The shape of his face under the features. Changes only with how his
+    head is turned and how open his eyes are, so it is cached with the head."""
+    p.setPen(Qt.NoPen)
+    # the face has form, it isn't a flat ball: each eye sits in a soft socket
+    # (shadow above and around it), and the muzzle is a small raised mound
+    # with a whisker pad either side that catches the light
+    for side in (-1, 1):
+        ex, ey, f = on_head(side * EYE_PHI, EYE_LAM, psi)
+        if f > 0.12:
+            cf_ = min(1.0, f / EYE_FRONT)
+            deep = cf_ * (0.3 + 0.7 * pose.eye_open * (1 - pose.happy) * (1 - 0.8 * pose.sleep))
+            sr = 27 * pose.eye_scale
+            sock = QRadialGradient(QPointF(0, 0), sr)
+            sock.setColorAt(0.0, QColor(0, 0, 0, 0))
+            sock.setColorAt(0.56, QColor(0, 0, 4, int(128 * deep)))
+            sock.setColorAt(0.8, QColor(0, 0, 4, int(52 * deep)))
+            sock.setColorAt(1.0, QColor(0, 0, 4, 0))
+            p.save()
+            p.translate(ex, ey - 2.5)
+            p.scale(max(0.5, cf_), 1.0)
+            p.setBrush(sock)
+            p.drawEllipse(QPointF(0, 0), sr, sr)
+            p.restore()
+    mx_, my_, mf_ = on_head(0, -46, psi)
+    if mf_ > 0.15:
+        mw = min(1.0, mf_ * 1.3)
+        chin = QRadialGradient(QPointF(mx_, my_ + 9.5), 12)       # under-chin shadow
+        chin.setColorAt(0.0, QColor(0, 0, 0, int(120 * mw)))
+        chin.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setBrush(chin)
+        p.drawEllipse(QPointF(mx_, my_ + 9.5), 14 * mw, 6)
+        for side in (-1, 1):                                       # whisker pads
+            px_, py_, pf_ = on_head(side * 13, -47, psi)
+            if pf_ > 0.15:
+                pad = QRadialGradient(QPointF(px_ - 1.2, py_ - 1.4), 8.5)
+                pad.setColorAt(0.0, QColor(150, 156, 190, int(92 * mw)))
+                pad.setColorAt(0.6, QColor(150, 156, 190, int(22 * mw)))
+                pad.setColorAt(1.0, QColor(150, 156, 190, 0))
+                p.setBrush(pad)
+                p.drawEllipse(QPointF(px_, py_), 8.5 * mw, 6.6)
+        bridge = QRadialGradient(QPointF(mx_, my_ - 9), 9)          # bridge of the nose
+        bridge.setColorAt(0.0, QColor(150, 156, 190, int(40 * mw)))
+        bridge.setColorAt(1.0, QColor(150, 156, 190, 0))
+        p.setBrush(bridge)
+        p.drawEllipse(QPointF(mx_, my_ - 9), 5.5 * mw, 9)
+
+
+def _face_features(p: QPainter, pose: Pose, psi: float) -> None:
+    p.setPen(Qt.NoPen)
     nx, ny, f = on_head(0, -40, psi)
     if f < 0.2:
         return
     w = min(1.0, f * 1.3)
-    p.setBrush(NOSE)
     nose = QPainterPath(QPointF(nx - 2.6 * w, ny - 1.4))
     nose.quadTo(QPointF(nx, ny - 2.6), QPointF(nx + 2.6 * w, ny - 1.4))
     nose.quadTo(QPointF(nx, ny + 2.4), QPointF(nx - 2.6 * w, ny - 1.4))
+    p.setBrush(QColor(0, 0, 0, 110))                   # it sits proud of the muzzle
+    p.drawPath(nose.translated(0.5, 0.9))
+    ng = QLinearGradient(QPointF(nx, ny - 2.4), QPointF(nx, ny + 2.2))
+    ng.setColorAt(0.0, QColor(255, 178, 196))
+    ng.setColorAt(0.55, NOSE)
+    ng.setColorAt(1.0, QColor(186, 96, 122))
+    p.setBrush(ng)
     p.drawPath(nose)
+    p.setBrush(QColor(255, 255, 255, 150))             # a tiny wet highlight
+    p.drawEllipse(QPointF(nx - 0.9 * w, ny - 1.25), 0.85 * w, 0.5)
     my = ny + 3.2
     open_ = max(pose.mouth, pose.yawn * 2.2)
     if open_ > 0.08:                                   # talking / yawning
@@ -960,11 +1332,19 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
         if special == "love" and opened > 0.3 and close < 0.6:                    # heart eyes
             beat = 1 + 0.08 * math.sin(pose.t * 9)
             p.setPen(Qt.NoPen)
-            p.setBrush(EYE)
             p.save()
             p.translate(c)
             p.scale(cf * beat, beat)
+            hg = QLinearGradient(QPointF(0, -12 * sz), QPointF(0, 13 * sz))   # puffy, not flat
+            hg.setColorAt(0.0, IRIS_DEEP)
+            hg.setColorAt(0.45, EYE)
+            hg.setColorAt(1.0, IRIS_LIGHT)
+            p.setBrush(QColor(0, 0, 0, 150))
+            p.drawPath(_heart(0.6, 2.0, 13.6 * sz))
+            p.setBrush(hg)
             p.drawPath(_heart(0, 1, 13 * sz))
+            p.setBrush(QColor(255, 255, 255, 200))
+            p.drawEllipse(QPointF(-5.2 * sz, -4.6 * sz), 2.5 * sz, 1.9 * sz)
             p.restore()
             continue
         if special == "dizzy" and opened > 0.3 and close < 0.6:                   # spiral eyes
@@ -1024,16 +1404,38 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             # iris: same lime, but with depth. Brighter toward the bottom where
             # light pools, a darker ring at the rim, and the shadow his upper
             # lid casts. Still reads as Kuro's flat lime from a distance.
-            iris = QRadialGradient(QPointF(ex, ey + ry * 0.38), max(rx, ry) * 1.25)
-            iris.setColorAt(0.0, IRIS_LIGHT)
-            iris.setColorAt(0.55, EYE)
-            iris.setColorAt(0.9, IRIS_DEEP)
-            iris.setColorAt(1.0, IRIS_RIM)
+            # 1. top to bottom: deep green under the brow, his lime through
+            #    the middle, a bright pool of light at the bottom
+            iris = QLinearGradient(QPointF(ex, ey - ry), QPointF(ex, ey + ry))
+            iris.setColorAt(0.0, IRIS_SHADOW)
+            iris.setColorAt(0.16, IRIS_DEEP)
+            iris.setColorAt(0.4, EYE)
+            iris.setColorAt(0.78, IRIS_LIGHT)
+            iris.setColorAt(1.0, EYE)
             p.setBrush(iris)
             p.drawEllipse(c, rx, ry)
-            shade = QLinearGradient(QPointF(ex, ey - ry), QPointF(ex, ey - ry * 0.35))
-            shade.setColorAt(0.0, QColor(8, 20, 0, 70))
-            shade.setColorAt(1.0, QColor(8, 20, 0, 0))
+            # 2. the eye is a ball: it darkens toward its rim all the way round
+            limb = QRadialGradient(c, max(rx, ry))
+            l0, l1, l2 = QColor(IRIS_RIM), QColor(IRIS_RIM), QColor(18, 40, 6)
+            l0.setAlpha(0)
+            l1.setAlpha(96)
+            l2.setAlpha(190)
+            limb.setColorAt(0.0, l0)
+            limb.setColorAt(0.8, l0)
+            limb.setColorAt(0.94, l1)
+            limb.setColorAt(1.0, l2)
+            p.save()
+            p.translate(c)
+            p.scale(rx / max(rx, ry), ry / max(rx, ry))
+            p.translate(-c.x(), -c.y())
+            p.setBrush(limb)
+            p.drawEllipse(c, max(rx, ry), max(rx, ry))
+            p.restore()
+            # 3. the shadow his brow and upper lid cast across the top of the eye
+            shade = QLinearGradient(QPointF(ex, ey - ry), QPointF(ex, ey - ry * 0.05))
+            shade.setColorAt(0.0, QColor(2, 12, 0, 150))
+            shade.setColorAt(0.38, QColor(2, 12, 0, 56))
+            shade.setColorAt(1.0, QColor(2, 12, 0, 0))
             p.setBrush(shade)
             p.drawEllipse(c, rx, ry)
             # pupil: travels far inside the eye, converges for a close cursor,
@@ -1048,14 +1450,37 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 lx, ly = lx / k, ly / k
             px = ex + lx * cf + 1.8 * math.sin(psi)            # looks where he faces
             py = ey + ly * opened + 3.0 * pose.sleep * opened       # sleepy eyes sink
+            # 4. the pupil is a hole: the iris sinks into shadow around it
+            well = QRadialGradient(QPointF(px, py), max(prx, pry) * 1.15)
+            well.setColorAt(0.0, QColor(10, 30, 0, 170))
+            well.setColorAt(0.78, QColor(10, 30, 0, 120))
+            well.setColorAt(1.0, QColor(10, 30, 0, 0))
+            p.save()
+            p.translate(px, py)
+            p.scale(prx / max(prx, pry), pry / max(prx, pry))
+            p.setBrush(well)
+            p.drawEllipse(QPointF(0, 0), max(prx, pry) * 1.15, max(prx, pry) * 1.15)
+            p.restore()
             p.setBrush(PUPIL)
             p.drawEllipse(QPointF(px, py), prx, pry)
             # a soft lime bounce inside the bottom of the pupil: wet, deep eyes
-            bounce = QRadialGradient(QPointF(px, py + pry * 0.95), pry * 0.9)
-            bounce.setColorAt(0.0, QColor(150, 200, 80, 44))
-            bounce.setColorAt(1.0, QColor(150, 200, 80, 0))
+            bounce = QRadialGradient(QPointF(px, py + pry * 0.95), pry * 0.95)
+            bounce.setColorAt(0.0, QColor(150, 205, 80, 78))
+            bounce.setColorAt(1.0, QColor(150, 205, 80, 0))
             p.setBrush(bounce)
             p.drawEllipse(QPointF(px, py), prx, pry)
+            # 5. the cornea is a glass dome over all of it: a faint sweep of
+            #    sky across the top, a thin crescent of light along the bottom
+            dome = QLinearGradient(QPointF(ex - rx, ey - ry), QPointF(ex + rx * 0.4, ey))
+            dome.setColorAt(0.0, QColor(210, 228, 255, 58))
+            dome.setColorAt(1.0, QColor(210, 228, 255, 0))
+            p.setBrush(dome)
+            p.drawEllipse(QPointF(ex - rx * 0.12, ey - ry * 0.34), rx * 0.8, ry * 0.56)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(244, 255, 200, 120), 1.5, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(QRectF(ex - rx * 0.82, ey - ry * 0.82, rx * 1.64, ry * 1.64),
+                      int(-128 * 16), int(76 * 16))
+            p.setPen(Qt.NoPen)
             if opened > 0.55:
                 # highlights stay where the light is: the eye looks glossy
                 # as the pupil moves under them. A big one, a small one, and
@@ -1079,6 +1504,18 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                     p.setBrush(QColor(255, 255, 255, a_))
                     p.drawPath(star)
             p.restore()
+            # the rim of the lids: a dark line all round, heavier along the
+            # top, so the eye sits IN his face instead of on it
+            p.save()
+            p.setOpacity(base_op * fade)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(0, 0, 0, 190), 1.15))
+            p.drawPath(eye_shape)
+            if lid <= 0.02:
+                p.setPen(QPen(QColor(0, 0, 0, 215), 2.1, Qt.SolidLine, Qt.RoundCap))
+                p.drawArc(QRectF(ex - rx, ey - ry, 2 * rx, 2 * ry), 22 * 16, 136 * 16)
+            p.restore()
+            p.setPen(Qt.NoPen)
             if lid > 0.02:                                   # soft dark lid edge
                 edge = QPainterPath(QPointF(ex - rx, lid_y - slant))
                 edge.quadTo(QPointF(ex, lid_y + sag), QPointF(ex + rx, lid_y + slant))
