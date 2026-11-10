@@ -36,6 +36,7 @@ SHADE = QColor(16, 16, 21)
 DEEP = QColor(3, 3, 5)
 RIM_COOL = QColor(126, 142, 200)       # the rim light
 RIM_FUR = QColor(92, 104, 150)         # black fur where that rim light grazes it
+RIM_LIMB = QColor(46, 52, 78)         # the same, fainter, on his legs
 LIGHT_DIR = (-0.42, -0.52)             # toward the key light (screen space)
 RIM = QColor(255, 255, 255, 36)        # faint outline so he reads on dark wallpapers
 INNER_EAR = QColor(238, 238, 242)
@@ -384,40 +385,27 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
         x, _ = project(f, 0, yaw)
         _ellipse(torso, x, y, math.hypot(w * cyaw, r * sy) * (1 + 0.07 * jig), r)
         _ellipse(torso_o, x, y, math.hypot(w * cyaw, r * sy) * (1 + 0.07 * jig) + 1.0, r + 1.0)
-    body_depth = project((hf + cf) / 2, 0, yaw)[1]
-    # with his legs tucked away he sits like a plush toy: the body widens into
-    # a soft round base that rests on the floor (bobbing a touch as he walks)
-    bob = abs(math.sin(phase * 2 * math.pi)) * 2.2 * pose.gait
-    bx_, _ = project((hf + cf) / 2, 0, yaw)
-    mid_y = (hy + cy) / 2
-    puff = (1 + 0.06 * jig) * (1 - 0.03 * sleep)
-    # a pear: narrow under his chin, round and wide at the bottom
-    for i in range(7):
-        u = i / 6
-        y = lerp(mid_y - 6, -17.0 - bob, u)
-        w = lerp(15.0, 27.5, math.sin(u * math.pi / 2)) * puff
-        h = lerp(14.0, 17.5, u)
-        _ellipse(torso, bx_, y, w, h)
-        _ellipse(torso_o, bx_, y, w + 1.0, h + 1.0)
 
     # ---- legs (IK) -----------------------------------------------------
     gp = _gait_params(pose.run)
     legs = []
     groom_paw = None              # a paw raised to his face is drawn in front of it
     groom_at = (0.0, 0.0)
+    contours = []                 # (centre, radius, start_deg, span_deg) for near haunch/shoulder
     paws: list[Paw] = []
+    toes: list[tuple[float, float, float]] = []
     for front in (1, 0):
         for side in (-1, 1):
             if front:
                 root_f, root_y = cf + 2, cy + rc * 0.35
                 base_f = cf + 2
-                s_off = side * lerp(8.5, 8.0, st)
+                s_off = side * lerp(9.0, 8.0, st)
                 a, bl = lerp(16.0, 11.5, st), lerp(16.0, 11.5, st)
-                radii = (7.4, 6.8, 6.4)
+                radii = (6.0, 5.2, 4.9)               # slim front legs, like the original
             else:
                 root_f, root_y = hf + 1, hy + rh * 0.3
                 base_f = lerp(hf + 11, hf + 1, st)
-                s_off = side * lerp(13.5, 8.5, st)
+                s_off = side * lerp(15.0, 8.5, st)
                 a, bl = lerp(16.0, 11.5, st), lerp(17.0, 12.0, st)
                 radii = (lerp(12.0, 9.5, st), 7.2, 6.6)
             dfo, lift, planted = _foot_cycle(phase + gp["off"][(front, side)],
@@ -465,17 +453,29 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
                     rr = lerp(r0, r1, u)
                     _ellipse(shape, x, y, rr, rr)
             px, depth = project(tgt[0] + 1.5, s_off, yaw)
+            pw = 5.8 if front else 6.8
             _ellipse(shape, px, tgt[1] + 0.2,
-                     math.hypot(8.0 * sy, 6.8 * cyaw), 5.0)       # round beans
-            near = (-s_off * math.sin(yaw) + (tgt[0] - (hf + cf) / 2) * math.cos(yaw) * 0.6
-                    ) > body_depth * 0.0 - 0.01
+                     math.hypot(8.0 * sy, pw * cyaw), 4.4)        # small round beans
+            # he faces you, so his front legs are always in front of his body and
+            # the hind legs (haunches) sit behind it, peeking out at the sides
+            near = bool(front)
             if front and side == near_side and (pose.paw_raise > 0.3 or pose.bat > 0.3):
                 groom_paw = shape
                 groom_at = (px, tgt[1])
             else:
                 rx0, _ = project(root_f, s_off, yaw)
                 legs.append((near, shape, (rx0, root_y, px, tgt[1])))
+            if near and sy > 0.45 and st > 0.3:
+                rx_, _ = project(root_f, s_off, yaw)
+                if front:                               # shoulder / elbow line
+                    contours.append((QPointF(rx_ - 2 * math.copysign(1, math.sin(yaw)), root_y + 2),
+                                     7.0, -75, 120))
+                else:                                   # front edge of the round haunch
+                    contours.append((QPointF(rx_ - 3 * math.copysign(1, math.sin(yaw)), root_y),
+                                     11.0, -80, 150))
             paws.append(Paw(QPointF(px, tgt[1] + 2.5), planted and pose.gait > 0.2, near))
+            if front and near and cyaw > 0.5:        # facing you: little toes on his front paws
+                toes.append((px, tgt[1] + 0.2, math.hypot(8.0 * sy, 6.8 * cyaw)))
 
     # ---- tail: tapered, curling, travelling wave
     tb_f = hf - rh * 0.85
@@ -662,6 +662,8 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     # ---- paint, back to front. Every part is shaded as its own rounded form
     # and drops a soft shadow on whatever is behind it, so he reads as a little
     # solid figure instead of one flat black cut-out.
+    far_legs = [(s_, at) for nr, s_, at in legs if not nr]
+    near_legs = [(s_, at) for nr, s_, at in legs if nr]
     hc0 = head_tf.map(QPointF(0, 0))
     bx0, _ = project((hf + cf) / 2, 0, yaw)
     body_c = QPointF(bx0, (hy + cy) / 2 - 2)
@@ -672,6 +674,31 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.drawPath(tail_o)
     p.drawPath(torso_o)
     p.drawPath(head_o)
+
+    def leg_form(shape, lift_):
+        """A limb as a soft cylinder: lit on the side facing the lamp, falling
+        to black across its width, a little darker toward the floor."""
+        box = shape.boundingRect()
+        g = QLinearGradient(QPointF(box.left() - 1, box.top()),
+                            QPointF(box.right() + 1, box.top() + box.width() * 0.5))
+        def mix(c, k):
+            return QColor(int(SHADE.red() + (c.red() - SHADE.red()) * k),
+                          int(SHADE.green() + (c.green() - SHADE.green()) * k),
+                          int(SHADE.blue() + (c.blue() - SHADE.blue()) * k))
+        g.setColorAt(0.0, mix(MID, lift_))
+        g.setColorAt(0.22, mix(LIT, lift_ * 0.8))
+        g.setColorAt(0.5, mix(MID, lift_))
+        g.setColorAt(0.8, SHADE)
+        g.setColorAt(1.0, DEEP)
+        return g
+
+    def cast(shape, strength=1.0):
+        """The soft shadow a part throws down and away from the light, on
+        whatever is behind it (three offset copies = a soft edge)."""
+        p.setCompositionMode(QPainter.CompositionMode_SourceAtop)   # only lands on him
+        p.setBrush(QColor(0, 0, 0, int(84 * strength)))
+        p.drawPath(shape.translated(1.1, 2.0))
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
     # each paw presses a small dark contact shadow into the floor
     if ground > 0.02:
@@ -687,8 +714,9 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
                 p.drawEllipse(QPointF(0, 0), 9.0, 9.0)
                 p.restore()
 
-    # his legs are tucked under him and never drawn: only a paw he lifts to
-    # groom or bat at something appears (see groom_paw below)
+    for shape, at in far_legs:                    # far legs sit in the body's shadow
+        p.setBrush(leg_form(shape, 0.25))
+        p.drawPath(shape)
 
     # tail: a round tube. Dark core, light along the side facing the lamp,
     # a cool rim along the other
@@ -725,9 +753,33 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.setBrush(under)
     p.drawPath(torso)
 
+    for shape, at in near_legs:                   # near legs: lit forms that shadow the body
+        cast(shape)
+        # the cool rim: the limb is painted once in rim light, then again
+        # nudged toward the lamp, leaving a crescent along its far edge
+        p.setBrush(RIM_LIMB)
+        p.drawPath(shape.translated(0.6, 0.4))
+        p.setBrush(leg_form(shape, 0.6))          # quiet: they belong to the body
+        p.drawPath(shape)
 
     paint_ears()
     _paint_skull(p, pose, psi, skull_layer, head_local, (hxh + pose.head_dx, hyh), dev_scale)
+
+    if toes and groom_paw is None:               # two tiny toe lines per front paw
+        a_t = int(150 * (1 - pose.gait) * (1 - st * 0.5))
+        if a_t > 8:
+            p.setPen(QPen(QColor(0, 0, 0, a_t), 1.2, Qt.SolidLine, Qt.RoundCap))
+            for tx, ty, tw_ in toes:
+                for dx in (-0.34, 0.34):
+                    p.drawLine(QPointF(tx + dx * tw_, ty + 0.6), QPointF(tx + dx * tw_ * 1.06, ty + 3.6))
+            p.setPen(Qt.NoPen)
+
+    # the near thigh and shoulder catch the light: a black body still reads
+    # as having legs and haunches side-on
+    if contours:
+        a_ = int(34 * min(1.0, (sy - 0.45) * 3) * st)
+        for c_, r_, _start, _span in contours:
+            _sheen(p, torso, c_, r_ * 1.5, a_)
 
     p.save()
     p.setTransform(head_tf, True)
