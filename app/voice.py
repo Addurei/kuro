@@ -207,6 +207,12 @@ class Speaker:
         if name == self.voice_name:
             self._natural, self.engine = voice, "natural"
             self.available = True
+            try:                              # the old voice isn't needed (~60 MB)
+                from .housekeeping import _remove, unused_voices
+                for f in unused_voices(voice_files(name)[0].parent, name):
+                    _remove(f)
+            except Exception:
+                pass
 
     @staticmethod
     def sapi_rate(wpm: int) -> int:

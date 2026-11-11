@@ -7,6 +7,7 @@ If he crashes over and over (4 times in 2 minutes) it stops and says so,
 instead of looping forever.
 """
 import faulthandler
+import gc
 import os
 import subprocess
 import sys
@@ -78,7 +79,25 @@ def run_kuro(recovered: bool) -> int:
         print("Kuro is already running.")
         return 0
 
+    # Python's garbage collector runs on whichever thread happens to allocate
+    # when it's due, and frees what it finds right there. If that's a
+    # background thread (the brain, the music watcher) and the garbage holds a
+    # Qt or COM object, freeing it there crashes the whole app (this was the
+    # "access violation ... Garbage-collecting" crash). So collection only
+    # ever happens here, on the UI thread, a few times a second, in tiny bites.
+    gc.disable()
+    gc_timer = QTimer(interval=400)
+    gc_ticks = [0]
+
+    def collect() -> None:
+        gc_ticks[0] += 1
+        gc.collect(2 if gc_ticks[0] % 150 == 0 else 0)          # full sweep each minute
+    gc_timer.timeout.connect(collect)
+    gc_timer.start()
+
     controller = Controller(app, load_settings())
+    from app import housekeeping
+    housekeeping.start(controller.s)
     if recovered:
         from app.i18n import t
         QTimer.singleShot(1800, lambda: controller.hud.say(

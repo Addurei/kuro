@@ -134,24 +134,38 @@ class AudioMeter:
         except Exception as e:
             log.info("audio meter off: %s", e)
             return
+        # The list of apps with audio (and each one's meter) is fetched every
+        # few seconds; in between only the meters are read, which is cheap.
+        # Every COM object is created, used and dropped on THIS thread.
+        meters: list[tuple[str, object]] = []
+        refreshed = -1e9
         while not self._stop.is_set():
             try:
                 now = time.monotonic()
-                for sess in AudioUtilities.GetAllSessions():
-                    proc = sess.Process
-                    if proc is None:
-                        continue
-                    name = proc.name().lower().removesuffix(".exe")
-                    self.levels.setdefault(name, 0.0)
-                    meter = sess._ctl.QueryInterface(IAudioMeterInformation)
+                if now - refreshed > 4.0:
+                    meters = []
+                    for sess in AudioUtilities.GetAllSessions():
+                        proc = sess.Process
+                        if proc is None:
+                            continue
+                        name = proc.name().lower().removesuffix(".exe")
+                        self.levels.setdefault(name, 0.0)
+                        meters.append((name, sess._ctl.QueryInterface(IAudioMeterInformation)))
+                    refreshed = now
+                for name, meter in meters:
                     if meter.GetPeakValue() > 0.0005:
                         self.levels[name] = now
+                if len(self.levels) > 64:          # apps long gone: forget them
+                    for k in [k for k, v in self.levels.items() if now - v > 600][:32]:
+                        self.levels.pop(k, None)
                 self.ok = True
             except Exception as e:
                 if self.ok:
                     log.info("audio meter read failed: %s", e)
                 self.ok = False
+                meters, refreshed = [], -1e9
             self._stop.wait(self.interval)
+        meters = []
 
     def audible(self, app_id: str, within: float = 1.5) -> bool | None:
         """Has that app made sound in the last moment? None = can't tell."""

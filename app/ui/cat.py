@@ -437,24 +437,27 @@ class CatWidget(QWidget):
         self.update()
 
     def _pace(self) -> None:
-        """Frame rate by need: 60 fps only while something is actually moving
-        fast, 30 while he idles (springs and sway look the same), 20 asleep,
-        4 while hidden. Physics uses real elapsed time, so nothing changes speed."""
-        lively = (self.mode != "rest" or self.hop_y > 0.5 or self._sparks or self._notes
-                  or self._scan_fade > 0 or self._action or self.expr
-                  or self.state in ("talking", "happy", "listening", "thinking")
-                  or self._cursor_speed > 400 or self._blink >= 0
-                  or self.sp["knead"].value > 0.05 or self._moving()
-                  or self._pet > 0.02 or self._hop_pending is not None
+        """Frame rate by need. 60 fps only while he is really moving (dragged,
+        flying, walking, hopping, being petted, a fast cursor to follow); 40
+        while he talks, reacts or blinks; 25 while he just sits and breathes;
+        15 asleep; 4 while hidden. Physics uses real elapsed time, so nothing
+        changes speed, it only gets fewer (identical-looking) in-between frames."""
+        fast = (self.mode != "rest" or self.hop_y > 0.5 or self._hop_pending is not None
+                or self._cursor_speed > 400 or self._moving() or self._pet > 0.02)
+        lively = (self._sparks or self._notes or self._scan_fade > 0 or self._action
+                  or self.expr or self.state in ("talking", "happy", "listening", "thinking")
+                  or self._blink >= 0 or self.sp["knead"].value > 0.05
                   or self.sp["mouth"].value > 0.03)
         if self.away:
             ms = 250
-        elif lively:
+        elif fast:
             ms = 16
+        elif lively:
+            ms = 25
         elif self.state == "sleeping" and self.t - self._doze_t0 > 4:
-            ms = 50
+            ms = 66
         else:
-            ms = 33
+            ms = 40
         if ms != self._frame.interval():
             self._frame.setInterval(ms)
 
