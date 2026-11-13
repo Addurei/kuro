@@ -1,6 +1,7 @@
 # Kuro 🐈‍⬛
 
 > Free and open source. Found a bug or an idea? Open an issue!
+
 A little black cat with small magical powers who lives on your Windows desktop, talks with you, and actually does things on your PC. You pick his brain: Gemini, Groq or OpenRouter (free keys), Ollama (free, offline), or OpenAI / Claude (paid).
 
 ## Quick start
