@@ -18,6 +18,9 @@ REPLY_RULE = {
 }
 
 LINES: dict[str, dict[str, str]] = {
+    "update_ready": {"English": "I learned some new tricks! I'll use them next time I wake up (v{version}).",
+                     "Filipino": "May bago akong natutunan! Gagamitin ko sa susunod kong gising (v{version}).",
+                     "Taglish": "May bagong tricks ako! Next restart ko na gamitin (v{version})."},
     "battery_low": {"English": "Battery's at {pct}%. Plug in before we lose your work!",
                     "Filipino": "{pct}% na lang ang baterya. I-charge mo na bago mawala ang gawa mo!",
                     "Taglish": "{pct}% na lang battery. Charge mo na bago mawala yung work mo!"},

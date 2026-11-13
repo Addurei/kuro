@@ -56,6 +56,8 @@ class Settings:
     auto_fallback: bool = True        # out of quota? use another brain you have a key for
     cloud_url: str = ""               # Kuro Cloud (subscription server, see server/)
     onboarded: bool = False           # finished the first-run welcome
+    auto_update: bool = True          # fetch new Kuro versions quietly
+    update_url: str = ""              # where latest.json lives ("" = updates off)
     max_tokens: int = 1024
 
     # behaviour

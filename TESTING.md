@@ -60,6 +60,16 @@ Tick each line; note anything odd with the time it happened, then share
 - [ ] "Dark mode on" / "dark mode off". "Brightness 40" (laptop screen)
 - [ ] Unplug a laptop under 20%: one warning bubble, not repeated until plugged in again
 
+## Show panel
+- [ ] "Spin a wheel: pizza, ramen, sisig" → the panel opens, the wheel spins ~3s and lands; Kuro names the same winner
+- [ ] "Flip a coin" / "roll a d20" → animated flip/roll, result matches what he says
+- [ ] "Chart this: Mon 3, Tue 7, Wed 5 hours" → animated bar chart; "as a pie" works too
+- [ ] SPIN AGAIN replays without involving the chat
+
+## Updates
+- [ ] With update_url unset: no update traffic at all (check kuro.log)
+- [ ] Publish a test release (make_release.py, serve dist/ over http), set update_url, restart → log says "update X staged"; the start after that says "updated to X" and Settings still has your key
+
 ## Looks
 - [ ] He reads as a solid little figure: lit from the upper left, a cool rim on the lower right, eyes set into his face with shade at the top
 - [ ] No lime line running round the chat or settings panel

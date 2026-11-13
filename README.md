@@ -59,6 +59,8 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 - **Tidy a folder**: "tidy my downloads" sorts loose files into Images, Documents, Videos... Shows the plan and asks first, deletes nothing, and "undo that" puts everything back.
 - **Dark mode and brightness**: "dark mode on", "brightness 40" (brightness on laptop screens).
 - **Battery warning**: tells you once at 20% and once at 10% when you're unplugged.
+- **The Show panel**: "spin a wheel to pick dinner" opens a real wheel that spins and lands; "flip a coin", "roll a d20" and "chart my study hours: mon 3, tue 7..." become an animated coin, die, or bar/line/pie chart. The result is decided fairly and Kuro says it too.
+- **He updates himself.** When `update_url` in config.json points at a published `latest.json` (see `scripts/make_release.py`), Kuro quietly fetches new versions and applies them the next time he starts. Settings and keys are never touched, and a bad download can't break the running Kuro.
 - **Learns about you** (Right-click → Memory to review or forget).
 - **Teleports** around your screens now and then (5 styles), and **hides during fullscreen** games and videos, holding any messages until you're back.
 
@@ -104,6 +106,11 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/tools.py` | Every PC action. **Add new abilities here** |
 | `app/memory.py` | Facts, habits, background reflection |
 | `app/controller.py` | Wires it all together |
+
+## Shipping
+
+- `python scripts/make_release.py 1.1.0 --notes "..."` makes `dist/kuro-1.1.0.zip` + `dist/latest.json`. Upload both to the same public folder (a GitHub release works); every installed Kuro whose `update_url` points at that `latest.json` updates itself within a day.
+- `installer\build_installer.bat` (needs the free Inno Setup 6) makes `dist/KuroSetup.exe`: a per-user installer, no admin rights, Start Menu + desktop shortcuts, uninstaller included. First start builds the Python environment; after that the self-updater keeps users current, so you ship the installer once.
 
 ## Tests
 

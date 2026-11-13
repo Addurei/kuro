@@ -62,6 +62,8 @@ class Signals(QObject):
     quick_text = Signal(str)
     quick_result = Signal(str)
     study_ready = Signal(object)
+    show_ready = Signal(object)
+    update_ready = Signal(str)
     briefing = Signal(str)
     google_status = Signal(bool, str)
     wake = Signal(str)
@@ -128,6 +130,9 @@ class Controller(FeaturesMixin):
                                  music=lambda: self.music.current,
                                  seek=self.music.seek,
                                  scan=self._scan_pc, scan_fx=self.sig.scan_fx.emit)
+        from .updater import Updater
+        self.updater = Updater(self.s, d, on_ready=self.sig.update_ready.emit)
+        self.updater.start()
         more, self.todo, self.routines = build_skills(d)
         for tool in more:
             self.tools[tool.name] = tool
@@ -198,6 +203,7 @@ class Controller(FeaturesMixin):
         self.sig.hotkey_chat.connect(self.toggle_chat)
         self.sig.hotkey_voice.connect(self.start_listening)
         self.sig.brain_switched.connect(self._brain_switched)
+        self.sig.update_ready.connect(self._update_ready)
 
         self._init_features_view()
         self._tick = QTimer(timeout=self._heartbeat)
@@ -621,6 +627,11 @@ class Controller(FeaturesMixin):
                 and self.cat.state == "idle" and self.cat.mode == "rest"
                 and not self.hud.is_open()):
             self.cat.set_state("sleeping")
+
+    def _update_ready(self, version: str) -> None:
+        if not self.busy and not self.hud.is_open():
+            self.hud.say(t(self.s, "update_ready", version=version), seconds=7)
+            self.cat.react("happy", 1.5)
 
     def _battery_watch(self) -> None:
         """A laptop about to die takes your work with it: he says so once at

@@ -36,7 +36,6 @@ SHADE = QColor(16, 16, 21)
 DEEP = QColor(3, 3, 5)
 RIM_COOL = QColor(126, 142, 200)       # the rim light
 RIM_FUR = QColor(92, 104, 150)         # black fur where that rim light grazes it
-RIM_LIMB = QColor(46, 52, 78)         # the same, fainter, on his legs
 LIGHT_DIR = (-0.42, -0.52)             # toward the key light (screen space)
 RIM = QColor(255, 255, 255, 36)        # faint outline so he reads on dark wallpapers
 INNER_EAR = QColor(238, 238, 242)
@@ -676,20 +675,19 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.drawPath(head_o)
 
     def leg_form(shape, lift_):
-        """A limb as a soft cylinder: lit on the side facing the lamp, falling
-        to black across its width, a little darker toward the floor."""
+        """A leg that belongs to the body: at the top it is as dark as the
+        chest it grows out of (so the two melt together, like the original
+        flat Kuro), and it gently comes into the light toward the paw."""
         box = shape.boundingRect()
-        g = QLinearGradient(QPointF(box.left() - 1, box.top()),
-                            QPointF(box.right() + 1, box.top() + box.width() * 0.5))
+        g = QLinearGradient(QPointF(box.left(), box.top()), QPointF(box.left(), box.bottom()))
         def mix(c, k):
             return QColor(int(SHADE.red() + (c.red() - SHADE.red()) * k),
                           int(SHADE.green() + (c.green() - SHADE.green()) * k),
                           int(SHADE.blue() + (c.blue() - SHADE.blue()) * k))
-        g.setColorAt(0.0, mix(MID, lift_))
-        g.setColorAt(0.22, mix(LIT, lift_ * 0.8))
-        g.setColorAt(0.5, mix(MID, lift_))
-        g.setColorAt(0.8, SHADE)
-        g.setColorAt(1.0, DEEP)
+        g.setColorAt(0.0, mix(SHADE, 0.5))            # melts into the chest
+        g.setColorAt(0.45, mix(MID, lift_ * 0.55))
+        g.setColorAt(0.78, mix(MID, lift_ * 0.95))    # the paw catches the light
+        g.setColorAt(1.0, mix(SHADE, 0.6))
         return g
 
     def cast(shape, strength=1.0):
@@ -753,25 +751,22 @@ def draw_cat(p: QPainter, pose: Pose, origin: QPointF, scale: float,
     p.setBrush(under)
     p.drawPath(torso)
 
-    for shape, at in near_legs:                   # near legs: lit forms that shadow the body
-        cast(shape)
-        # the cool rim: the limb is painted once in rim light, then again
-        # nudged toward the lamp, leaving a crescent along its far edge
-        p.setBrush(RIM_LIMB)
-        p.drawPath(shape.translated(0.6, 0.4))
-        p.setBrush(leg_form(shape, 0.6))          # quiet: they belong to the body
+    for shape, at in near_legs:
+        cast(shape, 0.55)                         # a soft shadow ties them to the belly...
+        p.setBrush(leg_form(shape, 0.6))          # ...and no bright edge cuts them off it
         p.drawPath(shape)
+        _sheen(p, shape, QPointF(at[2] - 1.6, at[3] - 1.2), 5.4, 26)      # soft puffy paw
 
     paint_ears()
     _paint_skull(p, pose, psi, skull_layer, head_local, (hxh + pose.head_dx, hyh), dev_scale)
 
-    if toes and groom_paw is None:               # two tiny toe lines per front paw
-        a_t = int(150 * (1 - pose.gait) * (1 - st * 0.5))
+    if toes and groom_paw is None:               # two tiny toe notches per front paw
+        a_t = int(175 * (1 - pose.gait) * (1 - st * 0.5))
         if a_t > 8:
-            p.setPen(QPen(QColor(0, 0, 0, a_t), 1.2, Qt.SolidLine, Qt.RoundCap))
+            p.setPen(QPen(QColor(0, 0, 0, a_t), 1.3, Qt.SolidLine, Qt.RoundCap))
             for tx, ty, tw_ in toes:
-                for dx in (-0.34, 0.34):
-                    p.drawLine(QPointF(tx + dx * tw_, ty + 0.6), QPointF(tx + dx * tw_ * 1.06, ty + 3.6))
+                for dx in (-0.3, 0.32):
+                    p.drawLine(QPointF(tx + dx * tw_, ty + 1.2), QPointF(tx + dx * tw_ * 1.04, ty + 4.0))
             p.setPen(Qt.NoPen)
 
     # the near thigh and shoulder catch the light: a black body still reads

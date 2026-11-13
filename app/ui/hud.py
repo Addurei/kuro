@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsOpacityEffect,
 from . import theme
 from .. import hotkeys as HK
 from .. import i18n
+from .showcase import ShowPage
 from .. import providers as P
 from ..voice import VOICES
 from .cat_rig import Spring
@@ -1872,8 +1873,8 @@ class WelcomePage(QWidget):
 
 
 # ======================================================================= hud
-SIZES = {"chat": (340, 400), "settings": (390, 520),
-         "confirm": (340, 230), "study": (360, 470), "welcome": (360, 340)}
+SIZES = {"chat": (340, 400), "settings": (390, 520), "confirm": (340, 230),
+         "study": (360, 470), "welcome": (360, 340), "show": (330, 390)}
 CHAT_SIZES = {"small": (300, 330), "medium": (340, 400), "large": (420, 540)}
 
 
@@ -1902,10 +1903,12 @@ class Hud(QWidget):
         self.settings = SettingsPage(settings, tester)
         self.confirm = ConfirmPage(settings.cat_name)
         self.study = StudyPage()
+        self.show_page = ShowPage()
         self.welcome = WelcomePage(settings, tester)
         self.stack = QStackedWidget(self)
         self.pages = {"bubble": self.bubble, "chat": self.chat, "settings": self.settings,
-                      "confirm": self.confirm, "study": self.study, "welcome": self.welcome}
+                      "confirm": self.confirm, "study": self.study, "welcome": self.welcome,
+                      "show": self.show_page}
         for w in self.pages.values():
             self.stack.addWidget(w)
         self.fade = QGraphicsOpacityEffect(self.stack)
@@ -1921,9 +1924,11 @@ class Hud(QWidget):
         self.settings.back.connect(lambda: self.open("chat"))
         self.settings.saved.connect(self._saved)
         self.hotkey_capture = self.settings.hotkey_capture
-        for page in (self.settings, self.welcome, self.chat, self.study, self.confirm):
+        for page in (self.settings, self.welcome, self.chat, self.study, self.confirm,
+                     self.show_page):
             hover_fx(page)                  # soft hover / press feedback everywhere
         self.study.back.connect(lambda: self.open("chat"))
+        self.show_page.back.connect(lambda: self.open("chat"))
         self.confirm.answered.connect(self._answer)
         self.welcome.finished.connect(self.close_panel)
         self.welcome.other_brains.connect(self._other_brains)
@@ -1945,7 +1950,7 @@ class Hud(QWidget):
 
     # ------------------------------------------------------------ public api
     def is_open(self) -> bool:
-        return self.page in ("chat", "settings", "confirm", "study", "welcome")
+        return self.page in ("chat", "settings", "confirm", "study", "welcome", "show")
 
     def say(self, text: str, seconds: float | None = None) -> None:
         """Show a line above Kuro. If a panel is open, it goes in the chat."""

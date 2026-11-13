@@ -9,6 +9,23 @@ instead of looping forever.
 import faulthandler
 import gc
 import os
+import sys as _sys
+from pathlib import Path as _Path
+
+# A staged update is applied before ANY of the app is imported, so the whole
+# program runs as one version. See app/updater.py for the full story.
+if "--child" not in _sys.argv:
+    try:
+        _data = _Path(os.environ.get("APPDATA", str(_Path.home() / ".config"))) / "Kuro"
+        if (_data / "update" / "pending" / "UPDATE_VERSION").is_file():
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "kuro_updater", _Path(__file__).resolve().parent / "app" / "updater.py")
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _mod.apply_pending(_Path(__file__).resolve().parent, _data)
+    except Exception:
+        pass
 import subprocess
 import sys
 import threading

@@ -49,6 +49,7 @@ class FeaturesMixin:
         self.sig.quick_result.connect(lambda t: self.quick.set_result(t))
         self.sig.hotkey_quick.connect(self._quick_hotkey)
         self.sig.study_ready.connect(self._study_open)
+        self.sig.show_ready.connect(self._show_open)
         self.sig.briefing.connect(self._briefing_show)
         self.sig.google_status.connect(self.hud.settings.set_google_status)
         self.sig.wake.connect(self._on_wake)
@@ -108,6 +109,25 @@ class FeaturesMixin:
         def briefing_tool() -> str:
             return self._build_briefing()
 
+        def show_tool(kind: str = "", options: list | None = None, labels: list | None = None,
+                      values: list | None = None, style: str = "bar", sides: int = 6,
+                      title: str = "") -> str:
+            from .ui.showcase import spin_spec
+            try:
+                spec = spin_spec(kind, options, labels, values, style, sides, title)
+            except ValueError as e:
+                raise ToolError(str(e))
+            self.sig.show_ready.emit(spec)
+            if spec["kind"] == "wheel":
+                return (f"The wheel is spinning on screen and will land on '{spec['text']}' "
+                        f"(picked fairly from {len(spec['options'])} options). Tell the user "
+                        "the result in your own words; keep it short.")
+            if spec["kind"] in ("coin", "dice"):
+                return (f"It landed on {spec['text']}. The animation is playing on screen; "
+                        "tell the user the result briefly.")
+            return (f"The {spec['text']} is on screen now. Describe what it shows in one or "
+                    "two sentences, don't read every number.")
+
         def calendar_tool(days: int = 1, start_date: str = "") -> str:
             start = None
             if start_date:
@@ -161,6 +181,20 @@ class FeaturesMixin:
             Tool("daily_briefing", "Today's briefing: weather, calendar, reminders, unread "
                  "email. Use when asked 'brief me', 'what's my day', 'good morning'.",
                  _obj({}), briefing_tool),
+            Tool("show", "Open Kuro's Show panel with something animated and real: "
+                 "kind 'wheel' (options: 2-12 choices; it spins and fairly picks one — use "
+                 "whenever the user wants a random pick or says spin the wheel), 'coin' (flip), "
+                 "'dice' (roll; sides, default 6), 'chart' (labels + matching numeric values, "
+                 "style bar|line|pie — use when the user gives or asks about numbers worth "
+                 "seeing). The result comes back to you.",
+                 _obj({"kind": {"type": "string", "enum": ["wheel", "coin", "dice", "chart"]},
+                       "options": {"type": "array", "items": {"type": "string"}},
+                       "labels": {"type": "array", "items": {"type": "string"}},
+                       "values": {"type": "array", "items": {"type": "number"}},
+                       "style": {"type": "string", "enum": ["bar", "line", "pie"]},
+                       "sides": {"type": "integer", "minimum": 2, "maximum": 100},
+                       "title": {"type": "string"}}, ["kind"]),
+                 show_tool),
         ]
         tools += [
             Tool("calendar_events", "List Google Calendar events (needs Google connected). "
@@ -232,6 +266,11 @@ class FeaturesMixin:
             self.cat.set_state("idle")
 
     # ================================================================ study
+    def _show_open(self, spec) -> None:
+        self.hud.show_page.load(spec)
+        self.hud.open("show")
+        self.cat.hop(110)                        # ta-da!
+
     def _study_open(self, payload) -> None:
         items, mode, title = payload
         self.hud.study.load(items, mode, title)
