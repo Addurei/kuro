@@ -23,4 +23,4 @@ pypdf
 # Voice (Piper: natural offline neural voice; Whisper runs on Groq, no package needed)
 piper-tts
 SpeechRecognition
-PyAudio
+PyAudio ; sys_platform == "win32"

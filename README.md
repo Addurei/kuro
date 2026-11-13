@@ -1,5 +1,6 @@
 # Kuro 🐈‍⬛
 
+> Free and open source. Found a bug or an idea? Open an issue!
 A little black cat with small magical powers who lives on your Windows desktop, talks with you, and actually does things on your PC. You pick his brain: Gemini, Groq or OpenRouter (free keys), Ollama (free, offline), or OpenAI / Claude (paid).
 
 ## Quick start
@@ -108,6 +109,11 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/controller.py` | Wires it all together |
 
 ## Shipping
+
+After creating the GitHub repo, set `update_url` in `%APPDATA%\Kuro\config.json` to
+`https://github.com/YOURNAME/kuro/releases/latest/download/latest.json` — that link always
+points at the newest release, so it never needs changing again.
+
 
 - `python scripts/make_release.py 1.1.0 --notes "..."` makes `dist/kuro-1.1.0.zip` + `dist/latest.json`. Upload both to the same public folder (a GitHub release works); every installed Kuro whose `update_url` points at that `latest.json` updates itself within a day.
 - `installer\build_installer.bat` (needs the free Inno Setup 6) makes `dist/KuroSetup.exe`: a per-user installer, no admin rights, Start Menu + desktop shortcuts, uninstaller included. First start builds the Python environment; after that the self-updater keeps users current, so you ship the installer once.
