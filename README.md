@@ -111,12 +111,9 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
 ## Shipping
 
-After creating the GitHub repo, set `update_url` in `%APPDATA%\Kuro\config.json` to
-`https://github.com/YOURNAME/kuro/releases/latest/download/latest.json` — that link always
-points at the newest release, so it never needs changing again.
 
 
-- `python scripts/make_release.py 1.1.0 --notes "..."` makes `dist/kuro-1.1.0.zip` + `dist/latest.json`. Upload both to the same public folder (a GitHub release works); every installed Kuro whose `update_url` points at that `latest.json` updates itself within a day.
+- `python scripts/make_release.py 1.1.0 --notes "..."` writes `releases/kuro-1.1.0.zip` + `releases/latest.json`. Commit and push — that's the whole release. `update_url` defaults to this repo's `releases/latest.json`, so every installed Kuro updates itself within a day.
 - `installer\build_installer.bat` (needs the free Inno Setup 6) makes `dist/KuroSetup.exe`: a per-user installer, no admin rights, Start Menu + desktop shortcuts, uninstaller included. First start builds the Python environment; after that the self-updater keeps users current, so you ship the installer once.
 
 ## Tests

@@ -2,10 +2,10 @@
 
     python scripts/make_release.py 1.1.0 [--notes "What changed"]
 
-Writes dist/kuro-1.1.0.zip and dist/latest.json, and stamps app/version.py.
-Upload BOTH files somewhere public (e.g. attach them to a GitHub release and
-point settings.update_url at latest.json's download URL). Every running Kuro
-with that update_url picks it up within a day and applies it on its next start.
+Writes releases/kuro-1.1.0.zip and releases/latest.json, and stamps
+app/version.py. The releases/ folder is part of the repo: commit and push it,
+and every running Kuro (update_url points at latest.json's raw GitHub URL)
+picks the new version up within a day and applies it on its next start.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 INCLUDE = ["main.py", "run.bat", "setup.bat", "requirements.txt", "README.md",
            "TESTING.md", "pytest.ini"]
 INCLUDE_DIRS = ["app", "assets", "server"]
+SELF = "releases"
 SKIP = {"__pycache__", ".pyc", ".pyo"}
 
 
@@ -48,8 +49,10 @@ def main() -> int:
     vp = ROOT / "app" / "version.py"
     vp.write_text('"""Kuro\'s version. scripts/make_release.py bumps this and stamps '
                   'releases."""\nVERSION = "%s"\n' % args.version, encoding="utf-8")
-    dist = ROOT / "dist"
+    dist = ROOT / "releases"
     dist.mkdir(exist_ok=True)
+    for old in dist.glob("kuro-*.zip"):           # keep the repo slim: newest zip only
+        old.unlink()
     zname = dist / f"kuro-{args.version}.zip"
     with zipfile.ZipFile(zname, "w", zipfile.ZIP_DEFLATED) as z:
         for p in files():
@@ -61,9 +64,9 @@ def main() -> int:
         "sha256": sha,
         "notes": args.notes,
     }, indent=2), encoding="utf-8")
-    print(f"dist/{zname.name}  ({zname.stat().st_size / 1e6:.1f} MB)\n"
-          f"dist/latest.json   (sha256 {sha[:12]}...)\n"
-          "Upload both to the same place; update_url points at latest.json.")
+    print(f"releases/{zname.name}  ({zname.stat().st_size / 1e6:.1f} MB)\n"
+          f"releases/latest.json   (sha256 {sha[:12]}...)\n"
+          "Now: git add -A && git commit -m \"release " + args.version + "\" && git push")
     return 0
 
 

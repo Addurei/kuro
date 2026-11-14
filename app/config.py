@@ -57,7 +57,8 @@ class Settings:
     cloud_url: str = ""               # Kuro Cloud (subscription server, see server/)
     onboarded: bool = False           # finished the first-run welcome
     auto_update: bool = True          # fetch new Kuro versions quietly
-    update_url: str = ""              # where latest.json lives ("" = updates off)
+    update_url: str = ("https://raw.githubusercontent.com/Addurei/kuro/main/"
+                       "releases/latest.json")   # where new versions come from ("" = off)
     max_tokens: int = 1024
 
     # behaviour

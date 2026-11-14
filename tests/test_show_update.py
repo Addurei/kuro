@@ -141,12 +141,17 @@ def test_release_zip_round_trips_through_the_updater(tmp_path):
     r = subprocess.run([sys.executable, "scripts/make_release.py", "1.0.1", "--notes", "t"],
                        capture_output=True, text=True, cwd=Path(__file__).parent.parent)
     assert r.returncode == 0, r.stdout + r.stderr
-    dist = Path(__file__).parent.parent / "dist"
+    dist = Path(__file__).parent.parent / "releases"
     info = json.loads((dist / "latest.json").read_text())
     assert info["version"] == "1.0.1" and info["sha256"]
     pending = U.stage_zip(dist / info["zip"], U.update_dir(tmp_path), info["version"])
     assert (pending / "main.py").is_file() and (pending / "app" / "updater.py").is_file()
     assert not list(pending.rglob("__pycache__"))
-    # put the stamp back so the working tree isn't left at 1.0.1
-    vp = Path(__file__).parent.parent / "app" / "version.py"
+    # put the working tree back the way it was (version stamp + release files)
+    import subprocess as sp
+    root = Path(__file__).parent.parent
+    vp = root / "app" / "version.py"
     vp.write_text(vp.read_text().replace("1.0.1", "1.0.0"))
+    if (root / ".git").exists():
+        sp.run(["git", "checkout", "--", "releases"], cwd=root, capture_output=True)
+        sp.run(["git", "clean", "-fq", "releases"], cwd=root, capture_output=True)
