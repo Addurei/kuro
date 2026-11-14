@@ -14,7 +14,7 @@ jobs:
           python-version: "3.12"
       - name: Qt offscreen libraries
         run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libdbus-1-3
-      - run: pip install -r requirements.txt pytest pyflakes
+      - run: pip install -r requirements.txt pytest pyflakes pillow
       - run: python -m pyflakes app main.py
       - run: python -m pytest -q
         env:

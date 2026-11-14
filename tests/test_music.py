@@ -50,7 +50,8 @@ def qapp():
 
 def test_now_playing_hud_spins_and_hides(qapp, tmp_path):
     import io
-    from PIL import Image
+    import pytest as _pt
+    Image = _pt.importorskip("PIL.Image")
     from PySide6.QtCore import QPoint
     from app.ui.nowplaying import NowPlaying
 
