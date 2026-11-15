@@ -1,8 +1,28 @@
-# Kuro 🐈‍⬛
+<p align="center">
+  <img src="assets/icon.png" width="160" alt="Kuro, a black cat with lime green eyes">
+</p>
 
-> Free and open source. Found a bug or an idea? Open an issue!
+<h1 align="center">Kuro</h1>
 
-A little black cat with small magical powers who lives on your Windows desktop, talks with you, and actually does things on your PC. You pick his brain: Gemini, Groq or OpenRouter (free keys), Ollama (free, offline), or OpenAI / Claude (paid).
+<p align="center">
+  <b>A little black cat who lives on your Windows desktop, talks with you, and actually does things on your PC.</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Addurei/kuro/releases/latest/download/KuroSetup.exe"><img src="https://img.shields.io/badge/download-KuroSetup.exe-84cc16?style=for-the-badge&logo=windows&logoColor=white" alt="Download KuroSetup.exe"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Addurei/kuro/releases/latest"><img src="https://img.shields.io/github/v/release/Addurei/kuro?color=84cc16" alt="Latest release"></a>
+  <a href="https://github.com/Addurei/kuro/actions/workflows/ci.yml"><img src="https://github.com/Addurei/kuro/actions/workflows/ci.yml/badge.svg" alt="Tests"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6" alt="Windows 10 / 11">
+  <img src="https://img.shields.io/badge/python-3.12-3776AB" alt="Python 3.12">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Addurei/kuro?color=lightgrey" alt="MIT license"></a>
+</p>
+
+Kuro is a JARVIS-style AI companion in the shape of a desktop pet. Ask him to open an app, set a reminder, quiz you on your notes or tell you why your PC is slow, and he does it, for real, then tells you in his own voice. He's **free and open source**: you pick his brain from Gemini, Groq or OpenRouter (free keys), Ollama (free, fully offline), or OpenAI / Claude (paid).
+
+Found a bug or have an idea? [Open an issue](https://github.com/Addurei/kuro/issues).
 
 ## Quick start
 
@@ -63,7 +83,7 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 - **Dark mode and brightness**: "dark mode on", "brightness 40" (brightness on laptop screens).
 - **Battery warning**: tells you once at 20% and once at 10% when you're unplugged.
 - **The Show panel**: "spin a wheel to pick dinner" opens a real wheel that spins and lands; "flip a coin", "roll a d20" and "chart my study hours: mon 3, tue 7..." become an animated coin, die, or bar/line/pie chart. The result is decided fairly and Kuro says it too.
-- **He updates himself.** When `update_url` in config.json points at a published `latest.json` (see `scripts/make_release.py`), Kuro quietly fetches new versions and applies them the next time he starts. Settings and keys are never touched, and a bad download can't break the running Kuro.
+- **He updates himself.** Once a day he checks this repo for a new version, downloads it quietly, and applies it the next time he starts. Settings and keys are never touched, and a bad download can't break the running Kuro.
 - **Learns about you** (Right-click → Memory to review or forget).
 - **Teleports** around your screens now and then (5 styles), and **hides during fullscreen** games and videos, holding any messages until you're back.
 
@@ -76,13 +96,33 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 5. Kuro → Settings → Google: paste both, press CONNECT, sign in in the browser.
 
 The sign-in token is stored encrypted for your Windows account (DPAPI) in `%APPDATA%\Kuro\google.token`.
-**Selling note:** Gmail read access is a Google "restricted" scope. Until the app passes Google's verification (which includes a security assessment), only the test users you add (up to 100) can connect. Calendar only needs the lighter "sensitive" verification.
 
 ## The HUD
 
 There's only one panel, and it's pinned above Kuro's head. It follows him wherever he goes and reshapes itself between the speech bubble, chat, settings, memory and the "allow this?" prompt. A lime light runs around its border: faster while he's thinking, red when he needs your permission.
 
-## How he moves
+## Known limits
+
+- Free brains have rate limits. When he hits one, he says so and tries the next model.
+- Web answers (news, scores) use Google Search with Gemini, and a DuckDuckGo search with the other brains.
+- Voice needs internet: push-to-talk uses Whisper (with your Groq key, Google as a fallback), and "Hey Kuro" uses Google's free speech service. The wake word only sends short phrases that sound like speech.
+- Windows only for now.
+- Connecting Gmail uses your own Google Cloud project (steps above), because Google only lets verified apps read mail for the public.
+
+## Privacy
+
+Kuro runs on your PC. Your API keys, settings and what he learns about you stay in `%APPDATA%\Kuro` on your machine; delete that folder and he forgets everything. What leaves your PC:
+
+- your messages, to the brain you picked (Gemini, Groq, OpenRouter, OpenAI or Claude), or nothing at all with Ollama
+- a rough location from your IP address, and weather for it (geojs / ipapi / ipwho.is, Open-Meteo)
+- web searches you ask for (DuckDuckGo), and Gmail only if you connect your Google account
+- downloads of his voices (Hugging Face) and update checks (this GitHub repo)
+
+## Under the hood
+
+Kuro is written in Python with PySide6 (Qt). Everything below is for the curious and for contributors.
+
+### How he moves
 
 Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
@@ -110,42 +150,30 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/memory.py` | Facts, habits, background reflection |
 | `app/controller.py` | Wires it all together |
 
-## Shipping
+### Crash safety
+
+`main.py` runs Kuro under a tiny supervisor. If he crashes, the error (with every thread's stack, even for native crashes) goes to `%APPDATA%\Kuro\crash.log` and he restarts within two seconds ("Oops, I tripped over something. I'm back!"). Errors inside buttons or timers are logged without taking him down. After 4 crashes in 2 minutes he stops and shows where the log is, instead of looping.
+
+### Size and speed
+
+- `run.bat` slims Kuro's libraries after every install: unused Qt parts (Designer, QML, PDF, translations, dev tools; about 160 MB) are moved aside, Qt is test-started, and only then deleted (restored if anything fails). Old packages he no longer needs (pyttsx3 + pywin32, python-docx + lxml) are uninstalled.
+- He draws at 60 fps only while something moves fast, 30 while idle, 20 asleep, and nearly stops while hidden.
+- His skull (the costliest thing to shade) is painted once and re-used until he turns his head or blinks; the chat panel only repaints when it changes.
+
+### Kuro Cloud (optional shared brain)
+
+`server/kuro_cloud.py` is a small relay you can host so a group (a class, a club) can use Kuro without everyone making their own key: each person gets an access key, the relay checks it (exists, not expired, under its daily limit) and forwards their requests to Groq / Gemini with **your** key, falling back to the next upstream if one is out of quota. Your key never leaves the server. See the top of that file for running it and making access keys; people set `"cloud_url"` in config.json and pick **Kuro Cloud** in Settings.
+
+### Shipping
 
 - `python scripts/make_release.py 1.1.0 --notes "..."` writes `releases/kuro-1.1.0.zip` + `releases/latest.json`. Commit and push: `update_url` defaults to this repo's `releases/latest.json`, so every installed Kuro updates itself within a day.
 - Then `git tag v1.1.0 && git push origin v1.1.0`: GitHub Actions (`release.yml`) builds `KuroSetup.exe` with Inno Setup on Windows and publishes it as a release. The installer is per-user (no admin), makes Start Menu + desktop shortcuts, installs Python 3.12 if it's missing, and includes an uninstaller. The download link above always points at the newest release.
 - To build the installer locally instead: `installer\build_installer.bat` (needs the free Inno Setup 6).
 
-## Tests
+### Tests
 
-`python -m pytest` runs the test suite (173 tests): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
+`python -m pytest` runs the test suite (255 tests, also run by GitHub Actions on every push): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
 
-## Known limits
+## License
 
-- Free brains have rate limits. When he hits one, he says so and tries the next model.
-- Web answers (news, scores) use Google Search with Gemini, and a DuckDuckGo search with the other brains.
-- Voice recognition (and the wake word) uses Google's free web speech service, so it needs internet. The wake word only sends short phrases that sound like speech.
-- On Windows, clicks pass through the transparent area around the HUD. This hasn't been verified on real hardware yet.
-
-## Privacy
-
-Kuro runs on your PC. Your API keys, settings and what he learns about you stay in `%APPDATA%\Kuro` on your machine; delete that folder and he forgets everything. What leaves your PC:
-
-- your messages, to the brain you picked (Gemini, Groq, OpenRouter, OpenAI or Claude), or nothing at all with Ollama
-- a rough location from your IP address, and weather for it (geojs / ipapi / ipwho.is, Open-Meteo)
-- web searches you ask for (DuckDuckGo), and Gmail only if you connect your Google account
-- downloads of his voices (Hugging Face) and update checks (this GitHub repo)
-
-## Crash safety
-
-`main.py` runs Kuro under a tiny supervisor. If he crashes, the error (with every thread's stack, even for native crashes) goes to `%APPDATA%\Kuro\crash.log` and he restarts within two seconds ("Oops, I tripped over something. I'm back!"). Errors inside buttons or timers are logged without taking him down. After 4 crashes in 2 minutes he stops and shows where the log is, instead of looping.
-
-## Kuro Cloud (selling a subscription)
-
-`server/kuro_cloud.py` is a small relay you host: buyers get a license key, the relay checks it (exists, not expired, under its daily limit) and forwards their requests to Groq / Gemini with **your** key, falling back to the next upstream if one is out of quota. Your key never leaves the server. See the top of that file for running it and making licenses; buyers set `"cloud_url"` in config.json and pick **Kuro Cloud** in Settings.
-
-## Size and speed
-
-- `run.bat` slims Kuro's libraries after every install: unused Qt parts (Designer, QML, PDF, translations, dev tools; about 160 MB) are moved aside, Qt is test-started, and only then deleted (restored if anything fails). Old packages he no longer needs (pyttsx3 + pywin32, python-docx + lxml) are uninstalled.
-- He draws at 60 fps only while something moves fast, 30 while idle, 20 asleep, and nearly stops while hidden.
-- His skull (the costliest thing to shade) is painted once and re-used until he turns his head or blinks; the chat panel only repaints when it changes.
+MIT. Made by Drey ([@Addurei](https://github.com/Addurei)).
