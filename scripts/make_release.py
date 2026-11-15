@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INCLUDE = ["main.py", "run.bat", "setup.bat", "requirements.txt", "README.md",
-           "TESTING.md", "pytest.ini"]
+           "TESTING.md", "pytest.ini", "scripts/slim.py"]
 INCLUDE_DIRS = ["app", "assets", "server"]
 SELF = "releases"
 SKIP = {"__pycache__", ".pyc", ".pyo"}

@@ -29,7 +29,8 @@ log = logging.getLogger("kuro")
 
 # the only paths an update may replace — never config, voices or logs
 ALLOWED = ("app/", "assets/", "server/", "main.py", "run.bat", "setup.bat",
-           "requirements.txt", "README.md", "TESTING.md", "pytest.ini")
+           "requirements.txt", "README.md", "TESTING.md", "pytest.ini",
+           "scripts/slim.py")
 
 
 def parse(v: str) -> tuple[int, ...]:

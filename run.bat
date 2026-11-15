@@ -32,8 +32,11 @@ goto :eof
 
 :setup
 echo Setting up Kuro (first time, takes a few minutes)...
-where py >nul 2>nul || (echo Python is not installed. Get Python 3.12 from python.org first.& goto :eof)
-py -3.12 -m venv "%VENV%" >> "%LOG%" 2>&1 || py -3 -m venv "%VENV%" >> "%LOG%" 2>&1
+set "PYL=py"
+where py >nul 2>nul || set "PYL=%LOCALAPPDATA%\Programs\Python\Launcher\py.exe"
+if not "%PYL%"=="py" if not exist "%PYL%" set "PYL=%WINDIR%\py.exe"
+if not "%PYL%"=="py" if not exist "%PYL%" (echo Python is not installed. Get Python 3.12 from python.org, tick "Add python.exe to PATH", then start Kuro again. >> "%LOG%"& goto :eof)
+"%PYL%" -3.12 -m venv "%VENV%" >> "%LOG%" 2>&1 || "%PYL%" -3 -m venv "%VENV%" >> "%LOG%" 2>&1
 goto :eof
 
 :install

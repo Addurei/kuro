@@ -5,8 +5,13 @@
 ;
 ; The installer puts Kuro's code in %LOCALAPPDATA%\Programs\Kuro and makes
 ; Start Menu / Desktop shortcuts to run.bat. The first run of run.bat creates
-; the Python environment (setup.bat), and after that Kuro UPDATES HIMSELF from
+; the Python environment, and after that Kuro UPDATES HIMSELF from
 ; settings.update_url — you only ship this installer once per user.
+; If Python 3 isn't on the PC, the installer downloads Python 3.12 from
+; python.org and installs it per-user first (no admin, no questions).
+;
+; GitHub builds this automatically: pushing a tag like v1.0.1 runs
+; .github/workflows/release.yml, which publishes KuroSetup.exe as a release.
 
 #define AppVer GetEnv("KURO_VERSION") == "" ? "1.0.0" : GetEnv("KURO_VERSION")
 
@@ -35,6 +40,7 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs; Excludes: "__pycache__"
 Source: "..\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
 Source: "..\server\*"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs; Excludes: "__pycache__"
+Source: "..\scripts\slim.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\Kuro"; Filename: "{app}\run.bat"; WorkingDir: "{app}"; IconFilename: "{app}\assets\icon.ico"
@@ -49,3 +55,69 @@ Filename: "{app}\run.bat"; Description: "Start Kuro now (first start sets things
 [UninstallDelete]
 ; the Python environment and voices run.bat created
 Type: filesandordirs; Name: "{localappdata}\Kuro"
+
+[Code]
+const
+  PythonUrl = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe';
+
+var
+  DownloadPage: TDownloadWizardPage;
+
+function PythonFound(): Boolean;
+var
+  RC: Integer;
+begin
+  Result := FileExists(ExpandConstant('{localappdata}\Programs\Python\Launcher\py.exe'))
+    or FileExists(ExpandConstant('{win}\py.exe'));
+  if not Result then
+    Result := Exec(ExpandConstant('{cmd}'), '/c where py', '', SW_HIDE,
+                   ewWaitUntilTerminated, RC) and (RC = 0);
+end;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
+procedure InitializeWizard;
+begin
+  DownloadPage := CreateDownloadPage('Getting Python',
+    'Kuro runs on Python 3.12. It isn''t on this PC yet, so it''s being set up first.',
+    @OnDownloadProgress);
+end;
+
+procedure InstallPython;
+var
+  RC: Integer;
+  Ok: Boolean;
+begin
+  Ok := False;
+  DownloadPage.Clear;
+  DownloadPage.Add(PythonUrl, 'python-setup.exe', '');
+  DownloadPage.Show;
+  try
+    try
+      DownloadPage.Download;
+      DownloadPage.SetText('Installing Python 3.12...', 'This takes a minute.');
+      DownloadPage.ProgressBar.Style := npbstMarquee;
+      Ok := Exec(ExpandConstant('{tmp}\python-setup.exe'),
+        '/quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 InstallLauncherAllUsers=0 Include_test=0',
+        '', SW_HIDE, ewWaitUntilTerminated, RC) and (RC = 0);
+    except
+      Log('Python download failed: ' + GetExceptionMessage);
+    end;
+  finally
+    DownloadPage.Hide;
+  end;
+  if not Ok then
+    SuppressibleMsgBox('Python 3.12 could not be set up automatically.' + #13#10 +
+      'Kuro will still be installed: get Python 3.12 from python.org' + #13#10 +
+      '(tick "Add python.exe to PATH"), then start Kuro.', mbInformation, MB_OK, IDOK);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpReady) and not PythonFound() then
+    InstallPython;
+end;

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "zip": "kuro-1.0.0.zip",
-  "sha256": "45fecaa69d36b203062c448b9a8743921d846d58c3626e1cf8334389a53d09eb",
-  "notes": "First public Kuro: desktop cat companion with free-model brains, voice, music mode, focus mode, the Show panel and self-updates."
+  "version": "1.0.1",
+  "zip": "kuro-1.0.1.zip",
+  "sha256": "67933869a6ecc516427c233a4abc4a2bff8dbfaa4145019cd228949b92faaab0",
+  "notes": "One-click installer: KuroSetup.exe sets up Python for you if it's missing. Updates now carry the library slimmer too."
 }

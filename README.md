@@ -6,10 +6,11 @@ A little black cat with small magical powers who lives on your Windows desktop, 
 
 ## Quick start
 
-1. Install **Python 3.12** (python.org, tick "Add python.exe to PATH").
-2. Double-click **`setup.bat`** once.
-3. Double-click **`run.bat`**. On first launch Kuro introduces himself, asks your name and sets up his brain with you (Groq: free, fast, generous limits) in about a minute.
-4. Other brains any time: right-click Kuro → ⚙ Settings → **AI & Voice**.
+1. Download **[KuroSetup.exe](https://github.com/Addurei/kuro/releases/latest/download/KuroSetup.exe)** and run it. No admin rights needed, and if Python isn't on your PC the installer sets it up for you. (Windows may say "Windows protected your PC" because the installer isn't signed yet: **More info → Run anyway**.)
+2. Kuro starts when the installer finishes (the very first start takes a few minutes while he sets up his libraries). On first launch Kuro introduces himself, asks your name and sets up his brain with you (Groq: free, fast, generous limits) in about a minute.
+3. Other brains any time: right-click Kuro → ⚙ Settings → **AI & Voice**.
+
+Prefer running from source? Install Python 3.12 (tick "Add python.exe to PATH"), clone this repo and double-click `run.bat`.
 
 | Brain | Cost | Notes |
 |---|---|---|
@@ -111,10 +112,9 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 
 ## Shipping
 
-
-
-- `python scripts/make_release.py 1.1.0 --notes "..."` writes `releases/kuro-1.1.0.zip` + `releases/latest.json`. Commit and push — that's the whole release. `update_url` defaults to this repo's `releases/latest.json`, so every installed Kuro updates itself within a day.
-- `installer\build_installer.bat` (needs the free Inno Setup 6) makes `dist/KuroSetup.exe`: a per-user installer, no admin rights, Start Menu + desktop shortcuts, uninstaller included. First start builds the Python environment; after that the self-updater keeps users current, so you ship the installer once.
+- `python scripts/make_release.py 1.1.0 --notes "..."` writes `releases/kuro-1.1.0.zip` + `releases/latest.json`. Commit and push: `update_url` defaults to this repo's `releases/latest.json`, so every installed Kuro updates itself within a day.
+- Then `git tag v1.1.0 && git push origin v1.1.0`: GitHub Actions (`release.yml`) builds `KuroSetup.exe` with Inno Setup on Windows and publishes it as a release. The installer is per-user (no admin), makes Start Menu + desktop shortcuts, installs Python 3.12 if it's missing, and includes an uninstaller. The download link above always points at the newest release.
+- To build the installer locally instead: `installer\build_installer.bat` (needs the free Inno Setup 6).
 
 ## Tests
 

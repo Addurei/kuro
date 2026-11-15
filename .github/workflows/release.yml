@@ -1,0 +1,65 @@
+name: release
+# Push a tag like v1.0.1 and this builds KuroSetup.exe on Windows and publishes
+# a GitHub release with the installer, the update zip and latest.json.
+#   python scripts/make_release.py 1.0.1 --notes "What changed"
+#   git add -A && git commit -m "release 1.0.1" && git push
+#   git tag v1.0.1 && git push origin v1.0.1
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path app/version.py -Pattern 'VERSION = "(.+)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$v") {
+            Write-Error "Tag $env:GITHUB_REF_NAME doesn't match app/version.py ($v). Run scripts/make_release.py first."
+            exit 1
+          }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build KuroSetup.exe
+        shell: pwsh
+        env:
+          KURO_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\kuro.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item dist\KuroSetup.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KuroSetup-${{ steps.ver.outputs.version }}
+          path: dist/KuroSetup.exe
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Kuro ${{ steps.ver.outputs.version }}
+          body: |
+            **Download `KuroSetup.exe` below and run it.** No admin rights needed; if Python isn't on your PC, the installer sets it up for you.
+            Windows may show "Windows protected your PC" because the installer isn't code-signed yet: click **More info → Run anyway**.
+            Already have Kuro? He updates himself, nothing to do.
+          files: |
+            dist/KuroSetup.exe
+            releases/kuro-${{ steps.ver.outputs.version }}.zip
+            releases/latest.json
