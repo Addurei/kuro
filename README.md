@@ -127,9 +127,14 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 - Voice recognition (and the wake word) uses Google's free web speech service, so it needs internet. The wake word only sends short phrases that sound like speech.
 - On Windows, clicks pass through the transparent area around the HUD. This hasn't been verified on real hardware yet.
 
-## Before selling Kuro
+## Privacy
 
-Never ship your own API key inside the app; anyone can extract it. Either users paste their own free key (how it works now), or you run a small server that holds the key and checks subscriptions. Also: write a short privacy policy, since he reads files and remembers personal facts. A code-signing certificate avoids Windows SmartScreen warnings. Check Google's Gemini API terms for commercial use.
+Kuro runs on your PC. Your API keys, settings and what he learns about you stay in `%APPDATA%\Kuro` on your machine; delete that folder and he forgets everything. What leaves your PC:
+
+- your messages, to the brain you picked (Gemini, Groq, OpenRouter, OpenAI or Claude), or nothing at all with Ollama
+- a rough location from your IP address, and weather for it (geojs / ipapi / ipwho.is, Open-Meteo)
+- web searches you ask for (DuckDuckGo), and Gmail only if you connect your Google account
+- downloads of his voices (Hugging Face) and update checks (this GitHub repo)
 
 ## Crash safety
 
