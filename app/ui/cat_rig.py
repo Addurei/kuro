@@ -884,11 +884,11 @@ def _paint_skull(p: QPainter, pose: Pose, psi: float, layer, head_local: QPainte
     """His skull is the most expensive thing to shade and it rarely changes:
     it bobs and tilts far more often than it turns. So it is painted once into
     an image, and that image is re-used (moved and tilted) until he actually
-    turns his head or blinks."""
+    turns his head (a blink doesn't touch it: that's all in the eyes)."""
     tilt = (QTransform().translate(at[0], at[1])
             .translate(0, 26).rotate(pose.head_tilt).translate(0, -26))
     size = QTransform().scale(HEAD_SCALE, HEAD_SCALE)
-    key = (round(psi, 2), round(pose.eye_scale, 2), round(pose.eye_open, 1),
+    key = (round(psi, 2), round(pose.eye_scale, 2),
            round(pose.happy, 1), round(pose.sleep, 1), round(dev_scale, 3))
     hit = _HEAD_CACHE.pop(key, None)
     if hit is None:
@@ -1113,7 +1113,7 @@ def _face(p: QPainter, pose: Pose, psi: float) -> None:
 
 def _face_form(p: QPainter, pose: Pose, psi: float) -> None:
     """The shape of his face under the features. Changes only with how his
-    head is turned and how open his eyes are, so it is cached with the head."""
+    head is turned, his mood and sleep, so it is cached with the head."""
     p.setPen(Qt.NoPen)
     # the face has form, it isn't a flat ball: each eye sits in a soft socket
     # (shadow above and around it), and the muzzle is a small raised mound
@@ -1122,7 +1122,7 @@ def _face_form(p: QPainter, pose: Pose, psi: float) -> None:
         ex, ey, f = on_head(side * EYE_PHI, EYE_LAM, psi)
         if f > 0.12:
             cf_ = min(1.0, f / EYE_FRONT)
-            deep = cf_ * (0.3 + 0.7 * pose.eye_open * (1 - pose.happy) * (1 - 0.8 * pose.sleep))
+            deep = cf_ * (0.3 + 0.7 * (1 - pose.happy) * (1 - 0.8 * pose.sleep))
             sr = 27 * pose.eye_scale
             sock = QRadialGradient(QPointF(0, 0), sr)
             sock.setColorAt(0.0, QColor(0, 0, 0, 0))
@@ -1437,6 +1437,9 @@ def _heart(cx: float, cy: float, r: float) -> QPainterPath:
 
 
 LID_MEET = 0.12     # where the lids meet: fraction of the eye radius below its centre
+LINER = (10, 8, 12)  # eyeliner ink (characters with LASHES)
+# a shut eye is drawn in the eye colour, or as the liner for lined eyes
+CLOSED = QColor(*LINER) if LASHES else QColor(EYE)
 
 
 def _closed_line(p: QPainter, ex: float, y: float, cf: float, sz: float, side: int,
@@ -1454,9 +1457,11 @@ def _closed_line(p: QPainter, ex: float, y: float, cf: float, sz: float, side: i
     p.drawPath(line)
     if LASHES:                           # closed: the liner's wing stays
         tip_y = ry_ if side > 0 else ly
-        p.setPen(QPen(col, 2.0 * sz, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(QPointF(ex + side * w, tip_y),
-                   QPointF(ex + side * (w + 4.2 * sz), tip_y - 3.0 * sz))
+        wing = QPainterPath(QPointF(ex + side * (w - 2.0 * sz), tip_y + 0.8 * sz))
+        wing.quadTo(QPointF(ex + side * (w + 2.6 * sz), tip_y + 0.2 * sz),
+                    QPointF(ex + side * (w + 6.0 * sz), tip_y - 4.4 * sz))
+        p.setPen(QPen(col, 2.4 * sz, Qt.SolidLine, Qt.RoundCap))
+        p.drawPath(wing)
 
 
 def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
@@ -1523,18 +1528,30 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             p.drawPath(path)
             continue
 
-        if opened > 0.16 and happy < 0.55 and close < 0.93:
+        if opened > 0.16 and happy < 0.55 and close < 0.995:
             ry = 19.0 * sz * opened
             annoyed = special == "annoyed"
-            # closing: the upper lid comes down and the lower lid comes up a
-            # little, so they meet a bit below the middle of the eye (where a
-            # real cat's eye closes), not at the bottom over the whiskers
-            lid_c = close * (1 + LID_MEET) / 2 * 1.03
-            lid = max(pose.lid, 0.5 if annoyed else 0.0, lid_c)
+            # closing: the upper lid sweeps down and the lower lid rises a
+            # little, and both bend into the same soft curve, so at the end
+            # they meet in exactly the seam the closed eye is drawn as (a bit
+            # below the middle, where a real cat's eye closes). Nothing fades
+            # out halfway: the eye is simply covered.
+            seam_y = ey + LID_MEET * ry - 1.5 * sz       # the closed line's ends
+            seam_sag = 6.5 * sz                          # ...and its curve
             slant = side * 3.0 if annoyed else 0.0           # grumpy brow tilt
-            lid_y = ey - ry + 2 * ry * lid
-            low_y = ey + ry - close * (1 - LID_MEET) * ry * 1.03
-            sag = 2.5 + 2.5 * close + 4.0 * pose.sleep * (1 - close)   # drowsy: soft, round lids
+            rest_sag = 2.5 + 4.0 * pose.sleep                # drowsy: soft, round lids
+            # mid-blink the upper lid is an arch and the lower one a cup, like
+            # real lids, so the eye narrows to an almond from the corners in;
+            # both flatten into the seam's curve as they meet
+            mid = math.sin(math.pi * close)
+            sag = rest_sag + (seam_sag - rest_sag) * close - 0.95 * ry * mid
+            low_sag = rest_sag + (seam_sag - rest_sag) * close + 0.35 * ry * mid
+            lid_y = (ey - ry) + (seam_y - (ey - ry)) * close
+            held = max(pose.lid, 0.5 if annoyed else 0.0)    # lids resting low (annoyed, relaxed)
+            if ey - ry + 2 * ry * held > lid_y:
+                lid_y, sag = ey - ry + 2 * ry * held, rest_sag + 2.5 * close
+            lid = (lid_y - (ey - ry)) / (2 * ry)
+            low_y = (ey + ry) + (seam_y - (ey + ry)) * close
             # the eye is only drawn BETWEEN the eyelid lines, so the lids are
             # the head itself (same shading), not painted patches
             eye_shape = QPainterPath()
@@ -1550,12 +1567,13 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 below = QPainterPath(QPointF(ex - rx - 2, ey + ry + 3))
                 below.lineTo(QPointF(ex + rx + 2, ey + ry + 3))
                 below.lineTo(QPointF(ex + rx + 2, low_y))
-                below.quadTo(QPointF(ex, low_y + sag), QPointF(ex - rx - 2, low_y))
+                below.quadTo(QPointF(ex, low_y + low_sag), QPointF(ex - rx - 2, low_y))
                 below.closeSubpath()
                 eye_shape = eye_shape.subtracted(below)
-            # the last part of closing cross-fades into the closed line, so
-            # there's never a thin lime "goggles" slit between open and shut
-            fade = 1.0 - max(0.0, min(1.0, (close - 0.45) / 0.2))
+            # only the very last sliver hands over to the closed line
+            seam_a = max(0.0, min(1.0, (close - 0.7) / 0.3))
+            seam_a = seam_a * seam_a * (3 - 2 * seam_a)
+            fade = 1.0
             base_op = p.opacity()
             p.save()
             p.setOpacity(base_op * fade)
@@ -1629,6 +1647,14 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             bounce.setColorAt(1.0, QColor(*EYE_BOUNCE, 0))
             p.setBrush(bounce)
             p.drawEllipse(QPointF(px, py), prx, pry)
+            # 4b. the upper lid casts a soft shadow just under its edge, which
+            #     rides down the eye with it through a blink
+            if lid > 0.02:
+                ls = QLinearGradient(QPointF(ex, lid_y), QPointF(ex, lid_y + sag + ry * 0.5))
+                ls.setColorAt(0.0, QColor(*EYE_DARK, int(150 * EYE_SHADE_K * min(1.0, lid * 4))))
+                ls.setColorAt(1.0, QColor(*EYE_DARK, 0))
+                p.setBrush(ls)
+                p.drawRect(QRectF(ex - rx - 2, lid_y - 2, 2 * rx + 4, sag + ry * 0.5 + 4))
             # 5. the cornea is a glass dome over all of it: a faint sweep of
             #    sky across the top, a thin crescent of light along the bottom
             dome = QLinearGradient(QPointF(ex - rx, ey - ry), QPointF(ex + rx * 0.4, ey))
@@ -1683,7 +1709,9 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                     bx_ = ex + side * rx * math.cos(a_r)
                     rim_y = ey - ry * math.sin(a_r)
                     if lid > 0.02:
-                        rim_y = max(rim_y, lid_y + slant * side * math.cos(a_r) + sag * 0.3)
+                        u_ = (bx_ - ex) / (rx + 2)
+                        rim_y = max(rim_y, lid_y + slant * side * math.cos(a_r)
+                                    + sag * 0.5 * (1 - u_ * u_))
                     return bx_, rim_y, a_r
                 wing = QPainterPath()
                 outer = []
@@ -1704,8 +1732,9 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 for pt in reversed(outer):
                     wing.lineTo(pt)
                 wing.closeSubpath()
-                p.setPen(QPen(QColor(10, 8, 12, 235), 0.8))
-                p.setBrush(QColor(10, 8, 12, 235))
+                p.setOpacity(base_op * (1 - seam_a))
+                p.setPen(QPen(QColor(*LINER, 235), 0.8))
+                p.setBrush(QColor(*LINER, 235))
                 p.drawPath(wing)
             p.restore()
             p.setPen(Qt.NoPen)
@@ -1721,17 +1750,17 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 p.setPen(QPen(QColor(0, 0, 0, 150), 2.2, Qt.SolidLine, Qt.RoundCap))
                 p.drawPath(edge)
                 p.restore()
-                if close > 0.45:                             # becomes the closed-eye line
-                    a = min(1.0, (close - 0.45) / 0.35)
-                    _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side, slant,
-                                 _accent(int(255 * a)))
-                    p.setPen(Qt.NoPen)
+            if seam_a > 0:                                   # the seam becomes the closed eye
+                col = QColor(CLOSED)
+                col.setAlphaF(seam_a)
+                _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side, slant, col)
+                p.setPen(Qt.NoPen)
         elif happy < 0.5:
             # fully shut (asleep / mid-blink): a soft lime crease where the
             # lids met, the same line the closing animation ends on
             ry = 19.0 * sz * max(opened, 0.5)
             _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side,
-                         side * 3.0 if special == "annoyed" else 0.0, EYE)
+                         side * 3.0 if special == "annoyed" else 0.0, CLOSED)
         if happy > 0.01:
             col = QColor(EYE)
             col.setAlphaF(min(1.0, happy * 1.4))

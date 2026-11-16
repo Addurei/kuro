@@ -1,6 +1,6 @@
 {
-  "version": "1.0.2",
-  "zip": "kuro-1.0.2.zip",
-  "sha256": "73266e5ae8c9db08bbbedc3409913af8dc7e9785b6018a7b7c4032f812472c35",
-  "notes": "A redesigned first-run welcome, the Geist typeface across the app, and custom characters via CHARACTER.json."
+  "version": "1.0.3",
+  "zip": "kuro-1.0.3.zip",
+  "sha256": "1cfe6a3bdcdd7b2bb40db89c4031d5a76844a61a7eb7992f76a876dde138991d",
+  "notes": "Smoother blinks: eyelids sweep shut and ease open like a real cat's, with no fading or flicker. Kira's eyes close to her winged liner."
 }

@@ -443,10 +443,11 @@ class CatWidget(QWidget):
         15 asleep; 4 while hidden. Physics uses real elapsed time, so nothing
         changes speed, it only gets fewer (identical-looking) in-between frames."""
         fast = (self.mode != "rest" or self.hop_y > 0.5 or self._hop_pending is not None
+                or self._blink >= 0                  # blinks are quick: every frame counts
                 or self._cursor_speed > 400 or self._moving() or self._pet > 0.02)
         lively = (self._sparks or self._notes or self._scan_fade > 0 or self._action
                   or self.expr or self.state in ("talking", "happy", "listening", "thinking")
-                  or self._blink >= 0 or self.sp["knead"].value > 0.05
+                  or self._slow_blink_t >= 0 or self.sp["knead"].value > 0.05
                   or self.sp["mouth"].value > 0.03)
         if self.away:
             ms = 250
@@ -845,9 +846,24 @@ class CatWidget(QWidget):
         # taps follow your speed: ~1 paw press per 2 keys, capped so it stays cute
         self._knead_phase += dt * math.pi * min(9.0, max(2.5, rate * 0.9))
 
+    BLINK_S = 0.24     # one whole blink, shut and open again
+
+    @staticmethod
+    def _blink_curve(u: float) -> float:
+        """How shut the eyes are through a blink (0..1 over u = 0..1). Like a
+        real cat's: the lids sweep down quickly, rest a beat, then ease open
+        more slowly, rather than a symmetric bounce."""
+        if u < 0.28:                                  # sweep shut
+            x = u / 0.28
+            return x * x * (3 - 2 * x)
+        if u < 0.38:                                  # a beat, shut
+            return 1.0
+        x = (u - 0.38) / 0.62                         # ease open, settling at the end
+        return (1 - x) ** 3 * (1 + 3 * x)             # smooth at both ends
+
     def _blinks(self, dt: float) -> None:
         if self._blink >= 0:
-            self._blink += dt / 0.16
+            self._blink += dt / self.BLINK_S
             if self._blink >= 1:
                 self._blink = -1
                 if self._double_blink:
@@ -1280,7 +1296,7 @@ class CatWidget(QWidget):
     # =============================================================== paint
     def pose(self) -> Pose:
         sp, t = self.sp, self.t
-        blink = math.sin(math.pi * self._blink) if self._blink >= 0 else 0.0
+        blink = self._blink_curve(self._blink) if self._blink >= 0 else 0.0
         chatter = max(0.0, min(1.0, sp["mouth"].value))
         sleep = sp["sleep"].value
         breath = math.sin(t * (1.3 if sleep > 0.5 else 2.4)) * (1 + sleep)

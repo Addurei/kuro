@@ -48,9 +48,11 @@ def test_skull_is_reused_while_he_only_breathes_and_tilts(qapp):
         render(R.Pose(t=i / 30, yaw=12, breath=(i % 10) / 10, head_tilt=i * 0.2,
                       twitch_l=i * 0.3, ear=0.1))
     assert len(R._HEAD_CACHE) == 1                        # bobbing, tilting, ears: same skull
+    for k in range(11):                                   # a whole blink: still the same skull
+        render(R.Pose(t=1, yaw=12, eye_open=1 - k / 10))
+    assert len(R._HEAD_CACHE) == 1                        # (no stepped face shading mid-blink)
     render(R.Pose(t=1, yaw=30))
-    render(R.Pose(t=1, yaw=12, eye_open=0.0))
-    assert len(R._HEAD_CACHE) == 3                        # turning or blinking repaints it
+    assert len(R._HEAD_CACHE) == 2                        # turning repaints it
 
 
 def test_cache_stays_small(qapp):
@@ -88,3 +90,28 @@ def test_drawing_him_never_paints_outside_his_own_pixels(qapp):
 
 def test_the_moving_line_is_gone():
     assert not hasattr(theme, "paint_comet")
+
+
+def test_blink_is_one_smooth_motion():
+    """Shut fast, a beat, open slower; starts and ends at rest with no jumps."""
+    from app.ui.cat import CatWidget as C
+    v = [C._blink_curve(i / 200) for i in range(201)]
+    assert v[0] == 0 and abs(v[-1]) < 1e-9 and max(v) == 1.0
+    assert max(abs(b - a) for a, b in zip(v, v[1:])) < 0.03       # no pops
+    shut_at = next(i for i, x in enumerate(v) if x >= 0.999)
+    open_from = max(i for i, x in enumerate(v) if x >= 0.999)
+    assert shut_at < 200 - open_from                              # closes faster than it opens
+
+
+def test_eyes_close_without_dissolving(qapp):
+    """Mid-blink the eye is covered by the lids, not faded out: the iris that
+    is still visible stays fully bright."""
+    img, geo = render(R.Pose(t=1.0, yaw=0, eye_open=0.45), scale=3.0, size=(600, 480))
+    col = R.EYE
+    best = 0
+    for x in range(img.width()):
+        for y in range(0, img.height(), 2):
+            c = img.pixelColor(x, y)
+            if abs(c.hue() - col.hue()) < 12 and c.saturation() > 120:
+                best = max(best, c.value())
+    assert best > 200                                             # bright iris, not a ghost
