@@ -78,8 +78,7 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 - **Scan** (just ask): a document, PDF, Word file, code, an image, copied or pasted text, the song playing, your screen, or your PC.
 - **Study mode**: "make a quiz from biology.pdf" or "flashcards from these notes". Opens in the Study panel. Every question is checked (4 distinct options, one valid answer) before it's shown.
 - **Focus companion**: right-click → FOCUS (or "focus for 50 minutes"). Pomodoro cycles; he naps on the taskbar with a timer ring, wakes you for breaks, cheers at the end, and keeps daily stats.
-- **Daily briefing**: once a day, the first time he sees you: weather (he finds your city from your connection, nothing to type), today's calendar, reminders, unread mail, yesterday's focus. Or ask "brief me".
-- **Google Calendar + Gmail** (optional): see and add events (adding asks first), read your inbox. Gmail is read-only: he can never send, delete or change mail.
+- **Daily briefing**: once a day, the first time he sees you: weather (he finds your city from your connection, nothing to type), today's reminders and yesterday's focus. Or ask "brief me".
 - **Knows what you're doing** (from the app and window title only, never what's inside): glasses when you code or study, a pencil behind his ear when you write, a beret in Blender / design apps. His paws tap along when you type (he counts key presses, never which keys). Now and then a short line about it ("Working on Kuro again?"), at most one every 15 minutes, never during focus or fullscreen. Turn it off: Settings → General → React to what I'm doing.
 - **Reminders** that survive restarts.
 - **Sums and conversions done exactly**: "15% of 240", "5 ft in cm". He uses a calculator, never guesses.
@@ -95,16 +94,6 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 - **Learns about you** (Right-click → Memory to review or forget).
 - **Teleports** around your screens now and then (5 styles), and **hides during fullscreen** games and videos, holding any messages until you're back.
 
-### Connecting Google (one-time, ~5 minutes)
-
-1. Go to console.cloud.google.com → create a project.
-2. APIs & Services → Library: enable **Google Calendar API** and **Gmail API**.
-3. OAuth consent screen: External, add your app name, and add yourself as a **test user**.
-4. Credentials → Create credentials → OAuth client ID → **Desktop app**. Copy the client ID and secret.
-5. Kuro → Settings → Google: paste both, press CONNECT, sign in in the browser.
-
-The sign-in token is stored encrypted for your Windows account (DPAPI) in `%APPDATA%\Kuro\google.token`.
-
 ## The HUD
 
 There's only one panel, and it's pinned above Kuro's head. It follows him wherever he goes and reshapes itself between the speech bubble, chat, settings, memory and the "allow this?" prompt. A lime light runs around its border: faster while he's thinking, red when he needs your permission.
@@ -115,7 +104,6 @@ There's only one panel, and it's pinned above Kuro's head. It follows him wherev
 - Web answers (news, scores) use Google Search with Gemini, and a DuckDuckGo search with the other brains.
 - Voice needs internet: push-to-talk uses Whisper (with your Groq key, Google as a fallback), and "Hey Kuro" uses Google's free speech service. The wake word only sends short phrases that sound like speech.
 - Windows only for now.
-- Connecting Gmail uses your own Google Cloud project (steps above), because Google only lets verified apps read mail for the public.
 
 ## Privacy
 
@@ -123,7 +111,7 @@ Kuro runs on your PC. Your API keys, settings and what he learns about you stay 
 
 - your messages, to the brain you picked (Gemini, Groq, OpenRouter, OpenAI or Claude), or nothing at all with Ollama
 - a rough location from your IP address, and weather for it (geojs / ipapi / ipwho.is, Open-Meteo)
-- web searches you ask for (DuckDuckGo), and Gmail only if you connect your Google account
+- web searches you ask for (DuckDuckGo)
 - downloads of his voices (Hugging Face) and update checks (this GitHub repo)
 
 ## Under the hood
@@ -144,8 +132,8 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/ui/cat_rig.py` | The skeleton, IK, gaits and drawing |
 | `app/ui/cat.py` | Behaviour, teleports, physics, sparks |
 | `app/ui/quick.py` | Quick-actions panel |
-| `app/features.py` | Focus, study, briefing, Google, quick actions, wake word, do-not-disturb |
-| `app/focus.py` · `app/study.py` · `app/briefing.py` · `app/google.py` | The logic behind them |
+| `app/features.py` | Focus, study, briefing, Show panel, quick actions, wake word, do-not-disturb |
+| `app/focus.py` · `app/study.py` · `app/briefing.py` | The logic behind them |
 | `app/ui/hud.py` | The pinned HUD (all pages) and the radial menu |
 | `app/ui/theme.py` | Matte look, running border light, icons |
 | `app/providers.py` | All six brains: format translation, automatic model choice, fallbacks, error reasons |
@@ -194,7 +182,7 @@ update. It can even have its own installer, built from the same script:
 
 ### Tests
 
-`python -m pytest` runs the test suite (255 tests, also run by GitHub Actions on every push): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, and Google sign-in/Calendar/Gmail against mocked endpoints.
+`python -m pytest` runs the test suite (277 tests, also run by GitHub Actions on every push): tools, scans, memory, the tool loop, every brain against mocked servers, app launching, focus cycles, quiz validation, the briefing, the updater, and the cat's animation smoothness.
 
 ## License
 

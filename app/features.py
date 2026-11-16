@@ -1,7 +1,7 @@
 """Kuro's bigger features, mixed into the Controller to keep it readable:
 
   * Focus companion (pomodoro)          * Study mode (quiz / flashcards)
-  * Daily briefing                      * Google Calendar + Gmail (read-only)
+  * Daily briefing                      * Show panel (wheel, coin, dice, charts)
   * Select-anywhere quick actions       * "Hey Kuro" wake word
   * Do-not-disturb during fullscreen    (multi-monitor lives in the cat widget)
 """
@@ -17,7 +17,6 @@ from PySide6.QtCore import QTimer
 from . import briefing, location, quick, study, winutil
 from .i18n import t
 from .focus import FocusTimer
-from .google import Google, GoogleError, fmt_email, fmt_event
 from .tools import Tool, ToolError, _obj, _resolve_file, read_file
 
 log = logging.getLogger("kuro")
@@ -28,8 +27,6 @@ class FeaturesMixin:
     def _init_features_model(self, d) -> None:
         """Before the brain exists: state + tools."""
         self.focus = FocusTimer(d / "focus.json")
-        self.google = Google(d / "google.token", self.s.google_client_id,
-                             self.s.google_client_secret)
         self.dnd = False
         self._held: list[str] = []            # messages kept back during do-not-disturb
         self._quick_hwnd = 0
@@ -51,10 +48,7 @@ class FeaturesMixin:
         self.sig.study_ready.connect(self._study_open)
         self.sig.show_ready.connect(self._show_open)
         self.sig.briefing.connect(self._briefing_show)
-        self.sig.google_status.connect(self.hud.settings.set_google_status)
         self.sig.wake.connect(self._on_wake)
-        self.hud.settings.google_clicked.connect(self._google_toggle)
-        self._google_status()
 
         self._focus_timer = QTimer(timeout=self._focus_tick)
         self._focus_timer.start(1000)
@@ -128,42 +122,6 @@ class FeaturesMixin:
             return (f"The {spec['text']} is on screen now. Describe what it shows in one or "
                     "two sentences, don't read every number.")
 
-        def calendar_tool(days: int = 1, start_date: str = "") -> str:
-            start = None
-            if start_date:
-                try:
-                    start = datetime.fromisoformat(start_date).astimezone()
-                except ValueError:
-                    raise ToolError("start_date must look like 2026-11-09")
-            try:
-                evs = self.google.events(days, start)
-            except GoogleError as e:
-                raise ToolError(str(e))
-            if not evs:
-                return "No events in that range."
-            return "Events:\n" + "\n".join(fmt_event(e) for e in evs)
-
-        def add_event_tool(title: str, start: str, minutes: int = 60) -> str:
-            try:
-                when = datetime.fromisoformat(start)
-            except ValueError:
-                raise ToolError("start must be a local date-time like 2026-11-09T15:00")
-            try:
-                self.google.add_event(title, when, minutes)
-            except GoogleError as e:
-                raise ToolError(str(e))
-            return f"Added '{title}' on {when.strftime('%a %b %d, %I:%M %p')} ({minutes} min)."
-
-        def email_tool(query: str = "", count: int = 5) -> str:
-            try:
-                mails = self.google.emails(query or "is:unread in:inbox", count)
-            except GoogleError as e:
-                raise ToolError(str(e))
-            if not mails:
-                return "No matching emails."
-            return "Emails (newest first):\n" + "\n".join(
-                f"- {fmt_email(m)} — {m['snippet'][:140]}" for m in mails)
-
         tools = [
             Tool("study", "Make a quiz or flashcards from the user's notes, a PDF/Word file or "
                  "pasted text, and open them in the Study panel. mode: quiz or flashcards.",
@@ -178,8 +136,8 @@ class FeaturesMixin:
                  _obj({"action": {"type": "string", "enum": ["start", "stop", "status"]},
                        "minutes": {"type": "integer"}, "break_minutes": {"type": "integer"}},
                       ["action"]), focus_tool),
-            Tool("daily_briefing", "Today's briefing: weather, calendar, reminders, unread "
-                 "email. Use when asked 'brief me', 'what's my day', 'good morning'.",
+            Tool("daily_briefing", "Today's briefing: weather, today's reminders and "
+                 "yesterday's focus. Use when asked 'brief me', 'what's my day', 'good morning'.",
                  _obj({}), briefing_tool),
             Tool("show", "Open Kuro's Show panel with something animated and real: "
                  "kind 'wheel' (options: 2-12 choices; it spins and fairly picks one — use "
@@ -195,25 +153,6 @@ class FeaturesMixin:
                        "sides": {"type": "integer", "minimum": 2, "maximum": 100},
                        "title": {"type": "string"}}, ["kind"]),
                  show_tool),
-        ]
-        tools += [
-            Tool("calendar_events", "List Google Calendar events (needs Google connected). "
-                 "days = how many days from start_date (default today).",
-                 _obj({"days": {"type": "integer", "minimum": 1, "maximum": 31},
-                       "start_date": {"type": "string", "description": "YYYY-MM-DD"}}),
-                 calendar_tool),
-            Tool("add_calendar_event", "Add an event to Google Calendar. start is a local "
-                 "date-time YYYY-MM-DDTHH:MM (work it out from the current time).",
-                 _obj({"title": {"type": "string"}, "start": {"type": "string"},
-                       "minutes": {"type": "integer", "minimum": 5}}, ["title", "start"]),
-                 add_event_tool, risky=True,
-                 describe=lambda a: f"Add “{a.get('title', '?')}” to your Google Calendar "
-                                    f"at {a.get('start', '?')}"),
-            Tool("check_email", "Read the user's Gmail (read-only): unread by default, or a "
-                 "Gmail search query like 'from:prof' or 'subject:thesis'.",
-                 _obj({"query": {"type": "string"},
-                       "count": {"type": "integer", "minimum": 1, "maximum": 15}}),
-                 email_tool),
         ]
         return tools
 
@@ -279,25 +218,16 @@ class FeaturesMixin:
     # ================================================================ briefing
     def _build_briefing(self) -> str:
         now = datetime.now()
-        weather, events, unread = "", None, None
+        weather = ""
         try:
             weather = location.weather(self.s)          # no city to type, any brain
         except Exception as e:
             log.info("briefing weather skipped: %s", e)
-        if self.google.connected:
-            try:
-                events = [fmt_event(e) for e in self.google.events(1)]
-            except GoogleError as e:
-                log.info("briefing calendar skipped: %s", e)
-            try:
-                unread = [fmt_email(m) for m in self.google.emails(count=5)]
-            except GoogleError as e:
-                log.info("briefing email skipped: %s", e)
         today = now.date()
         reminders = [f"{r.message} at {r.due_dt.strftime('%I:%M %p').lstrip('0')}"
                      for r in self.reminders.all() if r.due_dt.date() == today]
-        return briefing.compose(self.s.user_name, now, weather, reminders, events, unread,
-                                self.focus.day(today - timedelta(days=1)))
+        return briefing.compose(self.s.user_name, now, weather, reminders,
+                                focus_yesterday=self.focus.day(today - timedelta(days=1)))
 
     def maybe_briefing(self) -> None:
         """Once a day, the first time he sees you (after 4 am)."""
@@ -324,39 +254,6 @@ class FeaturesMixin:
             return                            # nothing beyond "Morning!": skip it
         self.hud.chat.add("cat", text)
         self.say(text, state="happy")
-
-    # ================================================================ google
-    def _google_status(self) -> None:
-        g = self.google
-        if g.connected:
-            self.sig.google_status.emit(True, f"Connected as {g.email or 'your account'}.")
-        elif g.configured:
-            self.sig.google_status.emit(False, "Not connected.")
-        else:
-            self.sig.google_status.emit(False, "Add a client ID first (see README).")
-
-    def _google_toggle(self) -> None:
-        if self.google.connected:
-            self.google.disconnect()
-            self._google_status()
-            return
-        self.google.client_id = self.s.google_client_id
-        self.google.client_secret = self.s.google_client_secret
-        try:
-            self.s.save()
-        except OSError:
-            pass
-
-        def work():
-            try:
-                who = self.google.connect()
-                self.sig.google_status.emit(True, f"Connected as {who}.")
-            except GoogleError as e:
-                self.sig.google_status.emit(False, str(e))
-            except Exception as e:
-                log.exception("google connect")
-                self.sig.google_status.emit(False, f"Sign-in failed: {e}")
-        threading.Thread(target=work, daemon=True, name="google").start()
 
     # ================================================================ quick actions
     def _quick_hotkey(self) -> None:

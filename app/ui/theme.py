@@ -80,9 +80,11 @@ def paint_matte(p: QPainter, path: QPainterPath) -> None:
     p.setRenderHint(QPainter.Antialiasing)
     r = path.boundingRect()
     g = QLinearGradient(r.topLeft(), r.bottomLeft())
-    g.setColorAt(0.0, QColor(24, 25, 30, 250))
-    g.setColorAt(0.35, QColor(15, 16, 19, 250))
-    g.setColorAt(1.0, QColor(9, 9, 11, 252))
+    # fully opaque: at 98% whatever sat behind the window (desktop icons,
+    # another app's text) bled through as faint ghosts
+    g.setColorAt(0.0, QColor(24, 25, 30))
+    g.setColorAt(0.35, QColor(15, 16, 19))
+    g.setColorAt(1.0, QColor(9, 9, 11))
     p.fillPath(path, g)
     p.setClipPath(path)
     glow = QRadialGradient(QPointF(r.left() + r.width() * 0.12, r.top()), max(120.0, r.width() * 0.8))

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.4",
-  "zip": "kuro-1.0.4.zip",
-  "sha256": "fbc16c2d7c673703605257c7127eec362d6bc4779abc68cf11d1439f21cb44b9",
-  "notes": "Smoother everywhere: even frame pacing, breathing and tail tempo that ease, expressions that blend instead of switching, a contented squint when he's happy. New face icons. Updates can never downgrade."
+  "version": "1.0.5",
+  "zip": "kuro-1.0.5.zip",
+  "sha256": "0df0b773f7177ade05be6e495e1abf83d428df6765095b5d2e51b804ed881cc0",
+  "notes": "Settings are simpler: the Google tab (which needed every user to create a Google Cloud project) is gone. Panels are fully opaque, so nothing behind them shows through."
 }

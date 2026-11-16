@@ -7,6 +7,8 @@ after he starts. Only ever removes things Kuro made himself or can fetch again:
   (~43 MB; Kuro uses Whisper/Google online and only needs the Windows part)
 - stray __pycache__ folders in his own app folder (Python keeps those in
   %LOCALAPPDATA%\\Kuro\\pycache now)
+- the Google sign-in token from versions that had Calendar + Gmail (that
+  integration is gone; the token shouldn't linger)
 """
 from __future__ import annotations
 
@@ -72,6 +74,15 @@ def stray_caches(root: Path = APP_DIR) -> list[Path]:
             for d in [root / sub / "__pycache__"] if d.is_dir()]
 
 
+def retired_files() -> list[Path]:
+    """Files only older versions used."""
+    try:
+        from .config import data_dir
+        return [p for p in (data_dir() / "google.token",) if p.exists()]
+    except Exception:
+        return []
+
+
 def tidy(settings, voice_dir: Path | None = None, site: Path | None = None) -> int:
     """Remove what isn't needed; returns bytes freed."""
     from .voice import VOICES, voice_files
@@ -82,7 +93,8 @@ def tidy(settings, voice_dir: Path | None = None, site: Path | None = None) -> i
         spec = importlib.util.find_spec("speech_recognition")
         site = Path(spec.origin).resolve().parent.parent if spec and spec.origin else Path("/nonexistent")
     keep = getattr(settings, "voice", "")
-    targets = unused_voices(voice_dir, keep) + speech_extras(site) + stray_caches()
+    targets = (unused_voices(voice_dir, keep) + speech_extras(site) + stray_caches()
+               + retired_files())
     freed = sum(_remove(p) for p in targets)
     if freed:
         log.info("housekeeping freed %.0f MB", freed / 1e6)

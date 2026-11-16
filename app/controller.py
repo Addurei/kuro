@@ -65,7 +65,6 @@ class Signals(QObject):
     show_ready = Signal(object)
     update_ready = Signal(str)
     briefing = Signal(str)
-    google_status = Signal(bool, str)
     wake = Signal(str)
     brain_switched = Signal(str, str)
 
@@ -491,8 +490,6 @@ class Controller(FeaturesMixin):
         if self.speaker:
             self.speaker.set_voice(self.s.voice, self.s.cute_voice)
         self.apply_wake_setting()
-        self.google.client_id = self.s.google_client_id
-        self.google.client_secret = self.s.google_client_secret
         self.hud.chat.set_status("online" if self.s.ready else "offline")
         self.hud.chat.set_starters(*chat_starters(self.s))       # language may have changed
         self.cat.set_state("happy")

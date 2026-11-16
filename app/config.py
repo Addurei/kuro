@@ -92,9 +92,6 @@ class Settings:
     break_minutes: int = 5
     focus_nap: bool = True            # he naps on the taskbar while you focus
 
-    # Google (Calendar + Gmail read-only). Client ID from Google Cloud Console.
-    google_client_id: str = ""
-    google_client_secret: str = ""
 
     # learning
     learn_enabled: bool = True        # reflect on chats and remember facts about you

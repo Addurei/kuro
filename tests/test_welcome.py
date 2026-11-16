@@ -59,3 +59,23 @@ def test_each_step_asks_for_a_height_that_fits():
     heights = [w.wanted_height(i) for i in range(4)]
     assert all(250 <= h <= 600 for h in heights)
     assert heights[1] < heights[0]             # the name step is short: no dead space
+
+
+def test_panels_are_opaque_so_nothing_behind_shows_through():
+    """At 98% opacity, desktop icons behind the HUD bled through as ghosts."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath
+    from app.ui import theme
+    shots = []
+    for back in (QColor(255, 255, 255), QColor(0, 0, 0)):
+        img = QImage(200, 160, QImage.Format_ARGB32)
+        img.fill(back)
+        p = QPainter(img)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(10, 10, 180, 140), 16, 16)
+        theme.paint_matte(p, path)
+        p.end()
+        shots.append(img)
+    for x in range(30, 170, 7):
+        for y in range(30, 130, 7):
+            assert shots[0].pixel(x, y) == shots[1].pixel(x, y)

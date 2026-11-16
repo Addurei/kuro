@@ -1033,11 +1033,9 @@ class SettingsPage(QWidget):
     saved = Signal()
     hotkey_capture = Signal(bool)
     back = Signal()
-    google_clicked = Signal()
     _tested = Signal(bool, str)
 
-    TABS = [("general", "General"), ("ai", "AI && Voice"), ("focus", "Focus"),
-            ("google", "Google")]
+    TABS = [("general", "General"), ("ai", "AI && Voice"), ("focus", "Focus")]
 
     def __init__(self, settings, tester):
         super().__init__()
@@ -1392,50 +1390,11 @@ class SettingsPage(QWidget):
         lay.addStretch()
         return w
 
-    def _tab_google(self) -> QWidget:
-        w, lay = self._page()
-        acct = Card()
-        self.g_btn = QPushButton("Connect")
-        self.g_btn.setObjectName("seg")
-        self.g_btn.clicked.connect(self._google)
-        self.g_row = _row("Google", self.g_btn, "Not connected")
-        self.g_status = self.g_row.findChildren(QLabel)[1]
-        acct.add(self.g_row)
-        setup = Card()
-        setup.add(_row("Client ID", self._edit("google_client_id", "from Cloud Console", 170)))
-        setup.add(_row("Secret", self._edit("google_client_secret", "client secret", 170,
-                                            secret=True)))
-        info = QLabel("Lets him read your calendar and inbox. He asks before adding "
-                      "events and can never send or delete mail. One-time setup: see the README.")
-        info.setWordWrap(True)
-        info.setStyleSheet(f"color: {DIM_HEX}; font-size: 8pt; padding: 8px 4px;")
-        lay.addWidget(_section("CALENDAR & GMAIL"))
-        lay.addWidget(acct)
-        lay.addWidget(_section("SETUP"))
-        lay.addWidget(setup)
-        lay.addWidget(info)
-        lay.addStretch()
-        return w
-
     # ------------------------------------------------------------ behaviour
-    def set_google_status(self, connected: bool, text: str) -> None:
-        self.g_btn.setText("Disconnect" if connected else "Connect")
-        self.g_btn.setEnabled(True)
-        self.g_status.setText(text)
-
-    def _google(self) -> None:
-        for attr in ("google_client_id", "google_client_secret"):
-            e = getattr(self, f"edit_{attr}")
-            setattr(self.s, attr, e.text().strip())
-        self.g_btn.setEnabled(False)
-        self.g_status.setText("Opening Google sign-in in your browser…")
-        self.google_clicked.emit()
-
     def reload(self) -> None:
         self._loading = True
         try:
-            for attr in ("user_name", "google_client_id", "google_client_secret"):
-                getattr(self, f"edit_{attr}").setText(str(getattr(self.s, attr)))
+            self.edit_user_name.setText(str(self.s.user_name))
             self.notice_toggle.setChecked(bool(self.s.aware and self.s.react_activity))
             self.focus_len.set_value(str(self.s.focus_minutes))
             self.break_len.set_value(str(self.s.break_minutes))
