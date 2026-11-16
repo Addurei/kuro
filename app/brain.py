@@ -33,7 +33,7 @@ OnAction = Callable[[str, dict], None]
 
 def persona_prompt(s: Settings) -> str:
     return f"""You are {s.cat_name}, {s.personality}
-You live as a little animated black cat on {s.user_name}'s Windows desktop and help them with their computer and their life.
+You live as a little animated cat on {s.user_name}'s Windows desktop and help them with their computer and their life.
 
 How you reply:
 - {REPLY_RULE.get(getattr(s, "language", "English"), REPLY_RULE["English"])}

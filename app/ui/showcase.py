@@ -21,7 +21,8 @@ from . import theme
 TEXT = QColor("#e8eaee")
 DIM = QColor("#8b8f98")
 # calm segment palette: lime first, then muted hues that sit well on the glass
-SEG = ["#bae25c", "#5cc8e2", "#e2a65c", "#b18ae8", "#e8718a", "#6fe0b2", "#e2d35c", "#7f9cf5"]
+SEG = [theme.LIME_HEX, "#5cc8e2", "#e2a65c", "#b18ae8", "#e8718a", "#6fe0b2", "#e2d35c",
+       "#7f9cf5"]
 
 
 def spin_spec(kind: str, options: list[str] | None = None, labels: list[str] | None = None,

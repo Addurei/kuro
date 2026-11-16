@@ -150,6 +150,17 @@ Kuro is drawn fresh every frame (60 fps) from a skeleton, not a flipbook:
 | `app/memory.py` | Facts, habits, background reflection |
 | `app/controller.py` | Wires it all together |
 
+## Custom characters 🎨
+
+The whole engine is character-driven: every colour, name, pronoun and accessory
+comes from one dict (`app/character.py`). To reskin your install, drop a
+`CHARACTER.json` next to `main.py` — anything you set (fur palette, eye colours,
+accent, a neck ribbon, eyeliner, wake words, personality) deep-merges over
+Kuro's defaults, and the `folder` key gives your character its own settings in
+`%APPDATA%\<folder>`, so it never touches Kuro's files. Releases never ship
+`CHARACTER.json` and the self-updater never overwrites it, so a custom
+character survives every update.
+
 ### Crash safety
 
 `main.py` runs Kuro under a tiny supervisor. If he crashes, the error (with every thread's stack, even for native crashes) goes to `%APPDATA%\Kuro\crash.log` and he restarts within two seconds ("Oops, I tripped over something. I'm back!"). Errors inside buttons or timers are logged without taking him down. After 4 crashes in 2 minutes he stops and shows where the log is, instead of looping.

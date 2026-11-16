@@ -21,8 +21,9 @@ def app_root() -> Path:
 
 def data_dir() -> Path:
     """Per-user writable folder for settings, memory, reminders and logs."""
+    from .character import CURRENT
     base = os.environ.get("APPDATA") or str(Path.home() / ".config")
-    d = Path(base) / "Kuro"
+    d = Path(base) / CURRENT["folder"]
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -41,14 +42,9 @@ def setup_logging() -> Path:
 
 @dataclass
 class Settings:
-    cat_name: str = "Kuro"
+    cat_name: str = ""                # "" = this install's character; see __post_init__
     user_name: str = "friend"         # asked in the first-run welcome
-    personality: str = (
-        "a cute, playful, slightly sassy black cat with small magical powers "
-        "(you can walk on air and blink across the screen), who is secretly very "
-        "capable. Short, warm, lively replies with a bit of cat attitude in the "
-        "wording itself. Never act out cat actions or sounds."
-    )
+    personality: str = ""             # "" = the character's own; see __post_init__
     provider: str = "gemini"          # gemini | groq | openrouter | ollama | openai | claude
     gemini_key: str = ""
     keys: dict = field(default_factory=dict)   # keys for the other brains
@@ -114,6 +110,24 @@ class Settings:
         str(Path.home() / "Downloads"),
         str(Path.home() / "Pictures"),
     ])
+
+    def __post_init__(self) -> None:
+        from .character import CURRENT
+        if not self.cat_name:
+            self.cat_name = CURRENT["name"]
+        if not self.personality:
+            if CURRENT["personality"]:
+                self.personality = (
+                    f"a cute {CURRENT['fur_word']} cat with small magical powers "
+                    "(you can walk on air and blink across the screen), "
+                    + CURRENT["personality"]
+                    + " Short, warm, lively replies. Never act out cat actions or sounds.")
+            else:
+                self.personality = (
+                    "a cute, playful, slightly sassy black cat with small magical powers "
+                    "(you can walk on air and blink across the screen), who is secretly "
+                    "very capable. Short, warm, lively replies with a bit of cat attitude "
+                    "in the wording itself. Never act out cat actions or sounds.")
 
     @property
     def path(self) -> Path:

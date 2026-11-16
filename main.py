@@ -14,9 +14,26 @@ from pathlib import Path as _Path
 
 # A staged update is applied before ANY of the app is imported, so the whole
 # program runs as one version. See app/updater.py for the full story.
+def _char_folder() -> str:
+    # A CHARACTER.json next to main.py reskins this install (see app/character.py).
+    # Read only json + pathlib here: this runs before the update is applied.
+    here = _Path(__file__).resolve().parent
+    try:
+        import json
+        data = json.loads((here / "CHARACTER.json").read_text(encoding="utf-8"))
+        folder = str(data.get("folder") or data.get("name") or "").strip()
+        if folder:
+            return folder
+    except (OSError, ValueError):
+        pass
+    return "Kuro"
+
+
+CHAR_NAME = _char_folder()
+
 if "--child" not in _sys.argv:
     try:
-        _data = _Path(os.environ.get("APPDATA", str(_Path.home() / ".config"))) / "Kuro"
+        _data = _Path(os.environ.get("APPDATA", str(_Path.home() / ".config"))) / CHAR_NAME
         if (_data / "update" / "pending" / "UPDATE_VERSION").is_file():
             import importlib.util as _ilu
             _spec = _ilu.spec_from_file_location(
@@ -86,14 +103,14 @@ def run_kuro(recovered: bool) -> int:
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication([a for a in sys.argv if a not in (CHILD_FLAG, RECOVERED_FLAG)])
-    app.setApplicationName("Kuro")
+    app.setApplicationName(CHAR_NAME)
     app.setQuitOnLastWindowClosed(False)  # closing the chat must not quit the cat
 
     # Only one cat at a time.
     lock = QLockFile(str(data_dir() / "kuro.lock"))
     lock.setStaleLockTime(0)
     if not lock.tryLock(100):
-        print("Kuro is already running.")
+        print(f"{CHAR_NAME} is already running.")
         return 0
 
     # Python's garbage collector runs on whichever thread happens to allocate

@@ -80,7 +80,7 @@ class IconButton(QAbstractButton):
         hover = self.underMouse()
         if self.filled:
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor("#cdf07a") if hover else theme.LIME)
+            p.setBrush(QColor(theme.ACC_LIGHT) if hover else theme.LIME)
             p.drawEllipse(r)
             theme.icon(p, self.kind, c, r.width() * 0.42, QColor(10, 10, 11))
             return
@@ -407,9 +407,9 @@ BUBBLE_CSS = {
             " border: 1px solid rgba(255,255,255,0.06); border-top-color: rgba(255,255,255,0.1);"
             " color: %s; border-radius: 15px; border-bottom-left-radius: 5px; padding: 9px 13px; }"
             % TEXT_HEX),
-    "you": ("QLabel { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d0f07c, stop:1 #aad44c);"
-            " color: #101208; border-radius: 15px; border-bottom-right-radius: 5px;"
-            " padding: 9px 13px; }"),
+    "you": ("QLabel { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 %s, stop:1 %s);"
+            " color: #141016; border-radius: 15px; border-bottom-right-radius: 5px;"
+            " padding: 9px 13px; }" % (theme.ACC_LIGHT, theme.ACC_DARK)),
 }
 
 
@@ -1200,7 +1200,7 @@ class SettingsPage(QWidget):
         self.hotkey_note.setVisible(False)
         keys.add(self.hotkey_note)
 
-        for title, card in (("YOU", you), ("KURO", kuro), ("PRIVACY", priv),
+        for title, card in (("YOU", you), (self.s.cat_name.upper(), kuro), ("PRIVACY", priv),
                             ("SHORTCUTS", keys)):
             lay.addWidget(_section(title))
             lay.addWidget(card)
@@ -1280,7 +1280,9 @@ class SettingsPage(QWidget):
         self.cute_row = self._toggle("cute_voice", "Cute voice")
         voice.add(self.cute_row)
         self.toggles["speak_replies"].toggled.connect(self._voice_rows)
-        voice.add(self._toggle("wake_word", "“Hey Kuro”", "Talk to him hands-free"))
+        from ..character import CURRENT
+        voice.add(self._toggle("wake_word", f"“Hey {self.s.cat_name}”",
+                               f"Talk to {CURRENT['pronouns'][1]} hands-free"))
 
         lay.addWidget(_section("BRAIN"))
         lay.addWidget(brain)

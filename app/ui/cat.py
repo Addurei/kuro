@@ -24,7 +24,7 @@ from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QImage, QPai
                            QRadialGradient)
 from PySide6.QtWidgets import QWidget
 
-from .cat_rig import EYE, Pose, Spring, _heart, draw_cat
+from .cat_rig import EYE, Pose, Spring, _accent, _heart, draw_cat
 
 HOP_GRAVITY = 900.0     # rig units/s^2 for little hops
 BLINK_TIME = 0.26       # seconds to vanish (and again to reappear)
@@ -351,16 +351,16 @@ class CatWidget(QWidget):
         rect = QRectF(cx - rx, cy - ry, 2 * rx, 2 * ry)
         p.save()
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(186, 226, 92, 50), 2.0))
+        p.setPen(QPen(_accent(50), 2.0))
         p.drawEllipse(rect)
-        p.setPen(QPen(QColor(186, 226, 92, 220), 2.4, Qt.SolidLine, Qt.RoundCap))
+        p.setPen(QPen(_accent(220), 2.4, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(rect, 90 * 16, -int(360 * 16 * self.focus_progress))
         if self.focus_label:
             f = QFont()
             f.setPixelSize(int(11 * self.k / 0.82))
             f.setBold(True)
             p.setFont(f)
-            p.setPen(QColor(186, 226, 92, 230))
+            p.setPen(_accent(230))
             p.drawText(QRectF(cx + rx + 4, cy - 14, 60, 18), Qt.AlignLeft | Qt.AlignVCenter,
                        self.focus_label)
         p.restore()
@@ -1439,12 +1439,12 @@ class CatWidget(QWidget):
         g = QRadialGradient(QPointF(cx, cy), rx)
         g.setColorAt(0, QColor(10, 14, 6, 230))
         g.setColorAt(0.75, QColor(20, 30, 8, 200))
-        g.setColorAt(1, QColor(186, 226, 92, 0))
+        g.setColorAt(1, _accent(0))
         p.setPen(Qt.NoPen)
         p.setBrush(g)
         p.drawEllipse(QPointF(cx, cy), rx, rx * 0.28)
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(186, 226, 92, int(220 * open_)), 2.2))
+        p.setPen(QPen(_accent(int(220 * open_)), 2.2))
         p.drawEllipse(QPointF(cx, cy), rx, rx * 0.28)
 
     def _paint_notes(self, p: QPainter) -> None:
@@ -1460,7 +1460,7 @@ class CatWidget(QWidget):
             a = min(1.0, age * 6) * (1 - age)
             x = n.x - origin.x() + n.drift * age + 4 * math.sin(age * 9)
             y = n.y - origin.y() - 55 * age
-            p.setPen(QColor(186, 226, 92, int(230 * a)))
+            p.setPen(_accent(int(230 * a)))
             p.drawText(QPointF(x, y), n.glyph)
 
     def _paint_sparks(self, p: QPainter) -> None:

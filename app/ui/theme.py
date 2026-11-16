@@ -7,9 +7,28 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QRadialGradient, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen)
 
-LIME = QColor(186, 226, 92)
+from ..character import CURRENT as _CHAR
+
+_ACC_RGB = "%d, %d, %d" % tuple(_CHAR["accent"][:3])
+
+
+def _shade(base: tuple, k: float) -> str:
+    """base accent scaled toward light (k>1) or dark (k<1), as #rrggbb."""
+    r, g, b = (max(0, min(255, int(v * k + (255 - 255 * min(1, k)) * 0.55))) for v in base[:3])
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+_A = tuple(_CHAR["accent"][:3])
+ACC_LIGHT = _shade(_A, 1.06)           # primary button, top of the gradient
+ACC_DARK = "#%02x%02x%02x" % tuple(int(v * 0.82) for v in _A)
+ACC_LIGHT2 = _shade(_A, 1.18)
+ACC_DARK2 = "#%02x%02x%02x" % tuple(int(v * 0.9) for v in _A)
+ACC_TINT_DK = "#%02x%02x%02x" % tuple(int(v * 0.16) for v in _A)   # checked seg, dark wash
+ACC_TINT_DK2 = "#%02x%02x%02x" % tuple(int(v * 0.11) for v in _A)
+
+LIME = QColor(*_CHAR["accent"])        # the character's accent (lime / rose)
 RED = QColor(255, 93, 108)
-LIME_HEX = "#bae25c"
+LIME_HEX = _CHAR["accent_hex"]
 DANGER_HEX = "#ff5d6c"
 TEXT_HEX = "#e9e9ec"
 DIM_HEX = "#868991"
@@ -65,8 +84,11 @@ def paint_matte(p: QPainter, path: QPainterPath) -> None:
     p.fillPath(path, g)
     p.setClipPath(path)
     glow = QRadialGradient(QPointF(r.left() + r.width() * 0.12, r.top()), max(120.0, r.width() * 0.8))
-    glow.setColorAt(0.0, QColor(186, 226, 92, 16))
-    glow.setColorAt(1.0, QColor(186, 226, 92, 0))
+    g0, g1 = QColor(LIME), QColor(LIME)
+    g0.setAlpha(16)
+    g1.setAlpha(0)
+    glow.setColorAt(0.0, g0)
+    glow.setColorAt(1.0, g1)
     p.fillRect(r, glow)
     sheen = QLinearGradient(r.topLeft(), QPointF(r.left(), r.top() + 70))
     sheen.setColorAt(0, QColor(255, 255, 255, 14))
@@ -164,14 +186,14 @@ QLineEdit {{ background: transparent; border: none; padding: 6px 2px;
              selection-background-color: {LIME_HEX}; selection-color: #0a0a0b; }}
 QFrame#field {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #0b0b0e, stop:1 #111216);
                 border: 1px solid #23252c; border-top-color: #1a1b20; border-radius: 13px; }}
-QFrame#field[focus="true"] {{ border-color: rgba(186, 226, 92, 0.65); }}
+QFrame#field[focus="true"] {{ border-color: rgba({_ACC_RGB}, 0.65); }}
 QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1c1d22, stop:1 #141519);
                border: 1px solid #26282e; border-top-color: #31333a; border-radius: 10px;
                padding: 7px 16px; font-family: {MONO_CSS}; font-size: 8.5pt; }}
 QPushButton:hover {{ border-color: #3a3d45; background: #1b1c20; }}
-QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d2f27f, stop:1 #a8d24a);
+QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {ACC_LIGHT}, stop:1 {ACC_DARK});
                        color: #0a0a0b; border: none; font-weight: 700; }}
-QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ddf796, stop:1 #b6dc5a); }}
+QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {ACC_LIGHT2}, stop:1 {ACC_DARK2}); }}
 QPushButton#danger {{ background: transparent; color: {DANGER_HEX};
                       border: 1px solid {DANGER_HEX}; font-weight: 700; }}
 QPushButton#danger:hover {{ background: rgba(255, 93, 108, 0.12); }}
@@ -183,8 +205,8 @@ QPushButton#ghost:hover {{ color: {TEXT_HEX}; }}
 QPushButton#seg {{ background: #101115; border: 1px solid #1f2127; border-radius: 9px;
                    padding: 5px 9px; color: {DIM_HEX}; font-family: {SANS_CSS}; font-size: 8.5pt; }}
 QPushButton#seg:hover {{ color: {TEXT_HEX}; }}
-QPushButton#seg:checked {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #232a14, stop:1 #191d10);
-                           border-color: rgba(186, 226, 92, 0.7); color: {LIME_HEX}; }}
+QPushButton#seg:checked {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {ACC_TINT_DK}, stop:1 {ACC_TINT_DK2});
+                           border-color: rgba({_ACC_RGB}, 0.7); color: {LIME_HEX}; }}
 QPushButton#option {{ background: #111216; border: 1px solid #202228; border-radius: 10px;
                       padding: 8px 12px; text-align: left; font-family: {SANS_CSS};
                       font-size: 9pt; color: {TEXT_HEX}; }}

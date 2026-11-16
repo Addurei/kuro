@@ -388,14 +388,18 @@ class Listener:
             raise RuntimeError("speech service unreachable (" + "; ".join(problems)[:200] + ")")
 
 
-WAKE_WORDS = ("kuro", "kurro", "curo", "kuru", "cuero", "kudo", "kiro", "cuddo", "kura")
+from .character import CURRENT as _CHAR
+
+# how speech engines tend to mishear the name (per character; see character.py)
+WAKE_WORDS = tuple(_CHAR.get("wake_words") or ("kuro",))
+_WAKE_STEM = str(_CHAR.get("wake_stem") or WAKE_WORDS[0][:3])
 
 
 def find_wake(text: str) -> tuple[bool, str]:
-    """('hey kuro, open spotify') -> (True, 'open spotify')."""
+    """('hey kuro, open spotify') -> (True, 'open spotify'); any character's name."""
     words = text.lower().replace(",", " ").replace(".", " ").split()
     for i, w in enumerate(words):
-        if w in WAKE_WORDS or (w.startswith("kur") and len(w) <= 5):
+        if w in WAKE_WORDS or (w.startswith(_WAKE_STEM) and len(w) <= 5):
             rest = " ".join(text.replace(",", " ").split()[i + 1:]).strip(" ,.!?")
             return True, rest
     return False, ""
