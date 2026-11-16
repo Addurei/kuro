@@ -1,6 +1,6 @@
 {
   "version": "1.0.2",
   "zip": "kuro-1.0.2.zip",
-  "sha256": "d4c9b1b5d2fea16142f091041390b838eeba9a9384296bde646d444fa4946629",
-  "notes": "A redesigned first-run welcome, bundled Geist typeface across the app, and custom characters via CHARACTER.json."
+  "sha256": "73266e5ae8c9db08bbbedc3409913af8dc7e9785b6018a7b7c4032f812472c35",
+  "notes": "A redesigned first-run welcome, the Geist typeface across the app, and custom characters via CHARACTER.json."
 }

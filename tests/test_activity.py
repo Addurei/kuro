@@ -8,7 +8,7 @@ from app.activity import PROPS, Activity, Tracker, Typing, detect
     ("Code", "controller.py - Kuro - Visual Studio Code", "coding", "controller", "Kuro"),
     ("pycharm64", "Kuro – main.py", "coding", "main", "Kuro"),
     ("WINWORD", "Thesis Chapter 2.docx - Word", "writing", "Thesis Chapter 2", ""),
-    ("blender", r"Blender [C:\Users\user\StThomas3.blend]", "designing", "StThomas3", ""),
+    ("blender", r"Blender [C:\Projects\house.blend]", "designing", "house", ""),
     ("chrome", "Thesis - Google Docs - Google Chrome", "writing", "Thesis", ""),
     ("chrome", "Two Sum - LeetCode - Google Chrome", "coding", "Two Sum", ""),
     ("opera", "(3) Hate Me - YouTube - Opera", "watching", "Hate Me", ""),

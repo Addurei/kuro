@@ -20,6 +20,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Addurei/kuro?color=lightgrey" alt="MIT license"></a>
 </p>
 
+<p align="center">
+  <img src="docs/hero.png" width="100%" alt="Kuro sitting on the taskbar next to his chat panel, where he has opened Spotify and started a focus session, and a spin-the-wheel panel that landed on Ramen">
+</p>
+
 Kuro is a JARVIS-style AI companion in the shape of a desktop pet. Ask him to open an app, set a reminder, quiz you on your notes or tell you why your PC is slow, and he does it, for real, then tells you in his own voice. He's **free and open source**: you pick his brain from Gemini, Groq or OpenRouter (free keys), Ollama (free, fully offline), or OpenAI / Claude (paid).
 
 Found a bug or have an idea? [Open an issue](https://github.com/Addurei/kuro/issues).
@@ -59,6 +63,10 @@ If Test fails, it shows the provider's exact reason (bad key, no internet, limit
 | Esc | Close the HUD |
 
 ## What he can do
+
+<p align="center">
+  <img src="docs/expressions.png" width="100%" alt="Kuro's moods and accessories: happy, coding in round glasses, vibing in headphones, designing in a red beret, smitten with heart eyes, surprised, and napping with a nose bubble">
+</p>
 
 - **Chat in character**: replies stream in word by word, and he starts speaking as soon as the first sentence is done. Chat size and his own size: Settings → General.
 - **Talks naturally**: a neural voice (Piper: Amy, Ryan or Lessac) running offline on your PC, optional "cute" pitch; the Windows voice takes over if the natural one isn't available. First use downloads the voice once (~60 MB).
