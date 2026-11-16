@@ -34,8 +34,10 @@ TEXT_HEX = "#e9e9ec"
 DIM_HEX = "#868991"
 FAINT_HEX = "#4a4d55"
 
-MONO = ["Cascadia Mono", "Consolas", "JetBrains Mono", "DejaVu Sans Mono"]
-SANS = ["Segoe UI Variable Text", "Segoe UI", "Inter", "DejaVu Sans"]
+# Geist ships in assets/fonts (loaded by fonts.load at startup); the rest are
+# fallbacks for a missing file.
+MONO = ["Geist Mono", "Cascadia Mono", "Consolas", "JetBrains Mono", "DejaVu Sans Mono"]
+SANS = ["Geist", "Segoe UI Variable Text", "Segoe UI", "Inter", "DejaVu Sans"]
 MONO_CSS = ", ".join(f"'{f}'" for f in MONO)
 SANS_CSS = ", ".join(f"'{f}'" for f in SANS)
 

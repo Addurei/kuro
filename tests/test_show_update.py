@@ -136,8 +136,27 @@ def test_updater_respects_the_off_switch(tmp_path):
 
 
 def test_release_zip_round_trips_through_the_updater(tmp_path):
-    """make_release's zip must be exactly what stage_zip accepts."""
-    import subprocess, sys
+    """make_release's zip must be exactly what stage_zip accepts.
+
+    It runs against the real repo, so it snapshots version.py and releases/
+    first and puts back exactly those bytes, whatever version is current."""
+    import shutil, subprocess, sys
+    root = Path(__file__).parent.parent
+    vp = root / "app" / "version.py"
+    saved_version = vp.read_bytes()
+    saved_releases = tmp_path / "releases-backup"
+    if (root / "releases").exists():
+        shutil.copytree(root / "releases", saved_releases)
+    try:
+        _round_trip(tmp_path, subprocess, sys)
+    finally:
+        vp.write_bytes(saved_version)
+        shutil.rmtree(root / "releases", ignore_errors=True)
+        if saved_releases.exists():
+            shutil.copytree(saved_releases, root / "releases")
+
+
+def _round_trip(tmp_path, subprocess, sys):
     r = subprocess.run([sys.executable, "scripts/make_release.py", "1.0.1", "--notes", "t"],
                        capture_output=True, text=True, cwd=Path(__file__).parent.parent)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -147,11 +166,3 @@ def test_release_zip_round_trips_through_the_updater(tmp_path):
     pending = U.stage_zip(dist / info["zip"], U.update_dir(tmp_path), info["version"])
     assert (pending / "main.py").is_file() and (pending / "app" / "updater.py").is_file()
     assert not list(pending.rglob("__pycache__"))
-    # put the working tree back the way it was (version stamp + release files)
-    import subprocess as sp
-    root = Path(__file__).parent.parent
-    vp = root / "app" / "version.py"
-    vp.write_text(vp.read_text().replace("1.0.1", "1.0.0"))
-    if (root / ".git").exists():
-        sp.run(["git", "checkout", "--", "releases"], cwd=root, capture_output=True)
-        sp.run(["git", "clean", "-fq", "releases"], cwd=root, capture_output=True)

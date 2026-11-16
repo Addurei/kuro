@@ -105,6 +105,11 @@ def run_kuro(recovered: bool) -> int:
     app = QApplication([a for a in sys.argv if a not in (CHILD_FLAG, RECOVERED_FLAG)])
     app.setApplicationName(CHAR_NAME)
     app.setQuitOnLastWindowClosed(False)  # closing the chat must not quit the cat
+    try:
+        from app.ui import fonts
+        fonts.load()                      # bundled Geist; system fonts if missing
+    except Exception:
+        pass
 
     # Only one cat at a time.
     lock = QLockFile(str(data_dir() / "kuro.lock"))

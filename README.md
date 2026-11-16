@@ -188,3 +188,5 @@ character survives every update.
 ## License
 
 MIT. Made by Drey ([@Addurei](https://github.com/Addurei)).
+
+Typeface: [Geist](https://vercel.com/font) by Vercel, SIL Open Font License (`assets/fonts/OFL.txt`).

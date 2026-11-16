@@ -1,6 +1,6 @@
 {
-  "version": "1.0.1",
-  "zip": "kuro-1.0.1.zip",
-  "sha256": "67933869a6ecc516427c233a4abc4a2bff8dbfaa4145019cd228949b92faaab0",
-  "notes": "One-click installer: KuroSetup.exe sets up Python for you if it's missing. Updates now carry the library slimmer too."
+  "version": "1.0.2",
+  "zip": "kuro-1.0.2.zip",
+  "sha256": "d4c9b1b5d2fea16142f091041390b838eeba9a9384296bde646d444fa4946629",
+  "notes": "A redesigned first-run welcome, bundled Geist typeface across the app, and custom characters via CHARACTER.json."
 }
