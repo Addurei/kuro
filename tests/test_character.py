@@ -106,3 +106,31 @@ def test_updates_never_overwrite_the_character_files():
     from app.updater import safe_member
     assert not safe_member("CHARACTER")
     assert not safe_member("CHARACTER.json")
+
+
+def test_custom_icon_lives_in_the_character_folder(tmp_path, monkeypatch):
+    """A custom character's art sits in character/, which updates never touch;
+    without it the shipped icon is used."""
+    import app.character as C
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "icon.png").write_bytes(b"png")
+    monkeypatch.setitem(C.CURRENT, "icon", "mochi.png")
+    assert C.icon_path(tmp_path) == tmp_path / "assets" / "icon.png"      # fallback
+    (tmp_path / "character").mkdir()
+    (tmp_path / "character" / "mochi.png").write_bytes(b"png")
+    assert C.icon_path(tmp_path) == tmp_path / "character" / "mochi.png"
+
+
+def test_updates_never_touch_the_character_folder():
+    from app.updater import safe_member
+    assert not safe_member("character/mochi.png")
+    assert not safe_member("character/installer/small-55.bmp")
+
+
+def test_installer_builds_any_character_from_one_script():
+    iss = (ROOT / "installer" / "kuro.iss").read_text()
+    for needle in ("#ifndef CatName", "AppName={#CatName}", "OutputBaseFilename={#CatName}Setup",
+                   "#ifdef CatDir", 'DestDir: "{app}\\character"'):
+        assert needle in iss
+    for s in (55, 64, 83, 110, 138):                      # Kuro's wizard art ships in the repo
+        assert (ROOT / "installer" / "art" / f"small-{s}.bmp").is_file()

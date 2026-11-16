@@ -889,7 +889,7 @@ def _paint_skull(p: QPainter, pose: Pose, psi: float, layer, head_local: QPainte
             .translate(0, 26).rotate(pose.head_tilt).translate(0, -26))
     size = QTransform().scale(HEAD_SCALE, HEAD_SCALE)
     key = (round(psi, 2), round(pose.eye_scale, 2),
-           round(pose.happy, 1), round(pose.sleep, 1), round(dev_scale, 3))
+           round(pose.happy * 20) / 20, round(pose.sleep * 20) / 20, round(dev_scale, 3))
     hit = _HEAD_CACHE.pop(key, None)
     if hit is None:
         bounds = size.map(head_local).boundingRect()
@@ -1205,10 +1205,11 @@ def _face_features(p: QPainter, pose: Pose, psi: float) -> None:
         m.quadTo(QPointF(nx + s_, my + 2.2), QPointF(nx + 2 * s_, my))
         p.drawPath(m)
         return
-    if pose.expr == "surprised" and pose.expr_amt > 0.4:        # little "o"
+    if pose.expr == "surprised" and pose.expr_amt > 0.4:        # little "o", opening up
+        k = _ss((pose.expr_amt - 0.4) / 0.6)
         p.setPen(QPen(MOUTH, 1.5))
         p.setBrush(QColor(60, 24, 32))
-        p.drawEllipse(QPointF(nx, my + 2.6), 2.6 * w, 3.0 * pose.expr_amt)
+        p.drawEllipse(QPointF(nx, my + 2.6), (1.2 + 1.4 * k) * w, 0.6 + 2.4 * k)
         return
     if pose.expr in ("annoyed", "dizzy") and pose.expr_amt > 0.4:
         p.setPen(QPen(MOUTH, 1.5, Qt.SolidLine, Qt.RoundCap))
@@ -1219,7 +1220,10 @@ def _face_features(p: QPainter, pose: Pose, psi: float) -> None:
         p.drawPath(m)
         return
     s = (3.3 + 1.2 * pose.happy) * w                   # the ω
-    pen = QPen(MOUTH if pose.happy < 0.5 else MOUTH_HAPPY, 1.5,
+    hk = _ss(pose.happy)                               # colour blends as he cheers up
+    pen = QPen(QColor(int(MOUTH.red() + (MOUTH_HAPPY.red() - MOUTH.red()) * hk),
+                      int(MOUTH.green() + (MOUTH_HAPPY.green() - MOUTH.green()) * hk),
+                      int(MOUTH.blue() + (MOUTH_HAPPY.blue() - MOUTH.blue()) * hk)), 1.5,
                Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
     p.setPen(pen)
     p.setBrush(Qt.NoBrush)
@@ -1464,15 +1468,30 @@ def _closed_line(p: QPainter, ex: float, y: float, cf: float, sz: float, side: i
         p.drawPath(wing)
 
 
+def _ss(x: float) -> float:
+    """Smoothstep on 0..1: eases in and out, so a blend never starts or stops with a jolt."""
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+
 def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
     sz = pose.eye_scale
     happy = pose.happy
     # `opened` is the eye's SHAPE (squints when happy / yawning); blinking,
     # sleeping and slow blinks are an eyelid sliding down over it, like a
     # real cat, so there's no squashed in-between frame
-    opened = (1 - happy) * (1 - min(1.0, pose.yawn * 1.4))
-    close = max(0.0, min(1.0, 1 - pose.eye_open))
-    special = pose.expr if pose.expr_amt > 0.5 else ""
+    opened = 1 - min(1.0, pose.yawn * 1.4)
+    # happiness is a contented squint: the lids close (never a fade), and the
+    # happy ^ arcs take over from the shut seam
+    close = max(0.0, min(1.0, 1 - pose.eye_open), _ss(happy / 0.55))
+    arc_a = _ss((happy - 0.4) / 0.35)
+    # every change of look is a cross-fade, never a switch at a threshold:
+    # heart / spiral eyes fade in over the normal eye, happy arcs replace the
+    # open eye as it squints, annoyed lids lower with the expression
+    spec_a = _ss((pose.expr_amt - 0.2) / 0.55) if pose.expr in ("love", "dizzy") else 0.0
+    normal_a = 1 - spec_a
+    ann_a = _ss(pose.expr_amt / 0.8) if pose.expr == "annoyed" else 0.0
+    base = p.opacity()
     for side in (-1, 1):
         ex, ey, facing = on_head(side * EYE_PHI, EYE_LAM, psi)
         cf = min(1.12, facing / EYE_FRONT)
@@ -1494,43 +1513,49 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             p.setPen(Qt.NoPen)
             p.drawEllipse(c, 30 * sz, 30 * sz)
 
-        if special == "love" and opened > 0.3 and close < 0.6:                    # heart eyes
-            beat = 1 + 0.08 * math.sin(pose.t * 9)
-            p.setPen(Qt.NoPen)
-            p.save()
-            p.translate(c)
-            p.scale(cf * beat, beat)
-            hg = QLinearGradient(QPointF(0, -12 * sz), QPointF(0, 13 * sz))   # puffy, not flat
-            hg.setColorAt(0.0, HEART_DEEP)
-            hg.setColorAt(0.45, HEART)
-            hg.setColorAt(1.0, HEART_LIGHT)
-            p.setBrush(QColor(0, 0, 0, 150))
-            p.drawPath(_heart(0.6, 2.0, 13.6 * sz))
-            p.setBrush(hg)
-            p.drawPath(_heart(0, 1, 13 * sz))
-            p.setBrush(QColor(255, 255, 255, 200))
-            p.drawEllipse(QPointF(-5.2 * sz, -4.6 * sz), 2.5 * sz, 1.9 * sz)
-            p.restore()
-            continue
-        if special == "dizzy" and opened > 0.3 and close < 0.6:                   # spiral eyes
-            p.setPen(QPen(EYE, 2.6, Qt.SolidLine, Qt.RoundCap))
-            p.setBrush(Qt.NoBrush)
-            spin = pose.t * 7 * side
-            path = QPainterPath()
-            for i in range(60):
-                ang = spin + i * 0.32
-                r = 1.2 + i * 0.24
-                pt = QPointF(ex + math.cos(ang) * r * cf, ey + math.sin(ang) * r)
-                if i == 0:
-                    path.moveTo(pt)
-                else:
-                    path.lineTo(pt)
-            p.drawPath(path)
-            continue
+        def draw_special():
+            if spec_a < 0.01 or opened < 0.3 or close > 0.6:
+                return
+            p.setOpacity(base * spec_a)
+            if pose.expr == "love":                                            # heart eyes
+                beat = 1 + 0.08 * math.sin(pose.t * 9)
+                p.setPen(Qt.NoPen)
+                p.save()
+                p.translate(c)
+                grow = 0.7 + 0.3 * spec_a                     # hearts swell in
+                p.scale(cf * beat * grow, beat * grow)
+                hg = QLinearGradient(QPointF(0, -12 * sz), QPointF(0, 13 * sz))   # puffy, not flat
+                hg.setColorAt(0.0, HEART_DEEP)
+                hg.setColorAt(0.45, HEART)
+                hg.setColorAt(1.0, HEART_LIGHT)
+                p.setBrush(QColor(0, 0, 0, 150))
+                p.drawPath(_heart(0.6, 2.0, 13.6 * sz))
+                p.setBrush(hg)
+                p.drawPath(_heart(0, 1, 13 * sz))
+                p.setBrush(QColor(255, 255, 255, 200))
+                p.drawEllipse(QPointF(-5.2 * sz, -4.6 * sz), 2.5 * sz, 1.9 * sz)
+                p.restore()
+            elif pose.expr == "dizzy":                                         # spiral eyes
+                p.setPen(QPen(EYE, 2.6, Qt.SolidLine, Qt.RoundCap))
+                p.setBrush(Qt.NoBrush)
+                spin = pose.t * 7 * side
+                path = QPainterPath()
+                for i in range(60):
+                    ang = spin + i * 0.32
+                    r = 1.2 + i * 0.24
+                    pt = QPointF(ex + math.cos(ang) * r * cf, ey + math.sin(ang) * r)
+                    if i == 0:
+                        path.moveTo(pt)
+                    else:
+                        path.lineTo(pt)
+                p.drawPath(path)
+            p.setOpacity(base)
 
-        if opened > 0.16 and happy < 0.55 and close < 0.995:
+        p.setOpacity(base * normal_a)
+        if normal_a < 0.01:
+            pass
+        elif opened > 0.16 and close < 0.995:
             ry = 19.0 * sz * opened
-            annoyed = special == "annoyed"
             # closing: the upper lid sweeps down and the lower lid rises a
             # little, and both bend into the same soft curve, so at the end
             # they meet in exactly the seam the closed eye is drawn as (a bit
@@ -1538,7 +1563,7 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             # out halfway: the eye is simply covered.
             seam_y = ey + LID_MEET * ry - 1.5 * sz       # the closed line's ends
             seam_sag = 6.5 * sz                          # ...and its curve
-            slant = side * 3.0 if annoyed else 0.0           # grumpy brow tilt
+            slant = side * 3.0 * ann_a                       # grumpy brow tilt
             rest_sag = 2.5 + 4.0 * pose.sleep                # drowsy: soft, round lids
             # mid-blink the upper lid is an arch and the lower one a cup, like
             # real lids, so the eye narrows to an almond from the corners in;
@@ -1547,7 +1572,7 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
             sag = rest_sag + (seam_sag - rest_sag) * close - 0.95 * ry * mid
             low_sag = rest_sag + (seam_sag - rest_sag) * close + 0.35 * ry * mid
             lid_y = (ey - ry) + (seam_y - (ey - ry)) * close
-            held = max(pose.lid, 0.5 if annoyed else 0.0)    # lids resting low (annoyed, relaxed)
+            held = max(pose.lid, 0.5 * ann_a)                # lids resting low (annoyed, relaxed)
             if ey - ry + 2 * ry * held > lid_y:
                 lid_y, sag = ey - ry + 2 * ry * held, rest_sag + 2.5 * close
             lid = (lid_y - (ey - ry)) / (2 * ry)
@@ -1752,18 +1777,20 @@ def _eyes(p: QPainter, pose: Pose, psi: float) -> None:
                 p.restore()
             if seam_a > 0:                                   # the seam becomes the closed eye
                 col = QColor(CLOSED)
-                col.setAlphaF(seam_a)
+                col.setAlphaF(seam_a * (1 - arc_a))
                 _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side, slant, col)
                 p.setPen(Qt.NoPen)
-        elif happy < 0.5:
+        else:
             # fully shut (asleep / mid-blink): a soft lime crease where the
             # lids met, the same line the closing animation ends on
             ry = 19.0 * sz * max(opened, 0.5)
-            _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side,
-                         side * 3.0 if special == "annoyed" else 0.0, CLOSED)
-        if happy > 0.01:
+            p.setOpacity(base * normal_a * (1 - arc_a))
+            _closed_line(p, ex, ey + LID_MEET * ry, cf, sz, side, side * 3.0 * ann_a, CLOSED)
+        p.setOpacity(base)
+        draw_special()
+        if arc_a > 0.01:
             col = QColor(EYE)
-            col.setAlphaF(min(1.0, happy * 1.4))
+            col.setAlphaF(arc_a)
             p.setPen(QPen(col, 3.8, Qt.SolidLine, Qt.RoundCap))
             p.setBrush(Qt.NoBrush)
             w = 12 * cf

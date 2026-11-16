@@ -165,9 +165,12 @@ comes from one dict (`app/character.py`). To reskin your install, drop a
 `CHARACTER.json` next to `main.py` — anything you set (fur palette, eye colours,
 accent, a neck ribbon, eyeliner, wake words, personality) deep-merges over
 Kuro's defaults, and the `folder` key gives your character its own settings in
-`%APPDATA%\<folder>`, so it never touches Kuro's files. Releases never ship
-`CHARACTER.json` and the self-updater never overwrites it, so a custom
-character survives every update.
+`%APPDATA%\<folder>`, so it never touches Kuro's files. Its own art (icon)
+goes in a `character/` folder beside it; `python scripts/make_icon.py` renders
+the face icon and installer art there for you. Releases never ship either, and
+the self-updater never touches them, so a custom character survives every
+update. It can even have its own installer, built from the same script:
+`ISCC /DCatName=Mochi /DCatDir=C:\path\to\mochi /DCatIcon=mochi.ico installer\kuro.iss`.
 
 ### Crash safety
 

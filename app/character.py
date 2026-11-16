@@ -11,8 +11,9 @@ bits you want to change:
     {"name": "Mochi", "folder": "Mochi", "accent": [255, 170, 60],
      "accent_hex": "#ffaa3c", "fur": {"LIT": [250, 240, 228]}}
 
-scripts/make_release.py never ships CHARACTER.json and the self-updater
-never overwrites it, so updates keep whoever your install already is.
+Its own art (an icon, say "icon": "mochi.png") goes in a character/ folder
+next to CHARACTER.json. scripts/make_release.py never ships either, and the
+self-updater never touches them, so updates keep whoever your install is.
 """
 from __future__ import annotations
 
@@ -52,6 +53,18 @@ CHARACTERS: dict[str, dict] = {
 
 def _root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def icon_path(root: Path | None = None) -> Path:
+    """The character's icon. A custom character keeps its own art in a
+    character/ folder next to CHARACTER.json: releases never contain that
+    folder and updates never touch it (they replace assets/ wholesale)."""
+    root = root or _root()
+    name = CURRENT.get("icon") or "icon.png"
+    for p in (root / "character" / name, root / "assets" / name):
+        if p.is_file():
+            return p
+    return root / "assets" / "icon.png"
 
 
 def character_key(root: Path | None = None) -> str:

@@ -3,3 +3,7 @@
 *.png binary
 *.ico binary
 *.onnx binary
+*.ttf binary
+*.bmp binary
+*.zip binary
+*.exe binary

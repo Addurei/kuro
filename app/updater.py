@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import shutil
 import threading
 import time
@@ -53,6 +54,25 @@ def safe_member(name: str) -> bool:
     if name.startswith("/") or ".." in name.split("/") or ":" in name.split("/")[0]:
         return False
     return any(name == a or (a.endswith("/") and name.startswith(a)) for a in ALLOWED)
+
+
+APP_DIR = Path(__file__).resolve().parent.parent
+
+
+def installed_version(app_dir: Path = APP_DIR) -> str:
+    """The version actually on disk right now (not the one this process
+    imported when it started, which can be stale after files change)."""
+    try:
+        text = (Path(app_dir) / "app" / "version.py").read_text(encoding="utf-8")
+        m = re.search(r'VERSION\s*=\s*"([^"]+)"', text)
+        return m.group(1) if m else "0"
+    except OSError:
+        return "0"
+
+
+def is_dev_checkout(app_dir: Path = APP_DIR) -> bool:
+    """A git checkout is where the code is written: never self-update it."""
+    return (Path(app_dir) / ".git").exists()
 
 
 def update_dir(data_dir: Path) -> Path:
@@ -127,6 +147,13 @@ def apply_pending(app_dir: Path, data_dir: Path) -> str:
     if not marker.is_file():
         return ""
     version = marker.read_text(encoding="utf-8").strip()
+    # never downgrade, and never touch a developer's checkout: an update
+    # staged by an older copy of the code must not overwrite newer files
+    if is_dev_checkout(app_dir) or not is_newer(version, installed_version(app_dir)):
+        log.info("discarding staged update %s (installed %s%s)", version,
+                 installed_version(app_dir), ", dev checkout" if is_dev_checkout(app_dir) else "")
+        shutil.rmtree(pending, ignore_errors=True)
+        return ""
     backup = Path(data_dir) / "update" / "backup"
     if backup.exists():
         shutil.rmtree(backup)
@@ -182,6 +209,9 @@ class Updater:
     def start(self, delay: float = 40.0) -> None:
         if not getattr(self.s, "update_url", "") or not getattr(self.s, "auto_update", True):
             return
+        if is_dev_checkout():
+            log.info("dev checkout: self-update off")
+            return
         if not self.due() or (self._thread and self._thread.is_alive()):
             return
         def run() -> None:
@@ -195,7 +225,7 @@ class Updater:
 
     def check_now(self) -> str:
         """Returns the staged version, or '' when already current."""
-        from .version import VERSION
+        VERSION = installed_version()
         self.stamp.write_text(str(time.time()), encoding="utf-8")
         info = fetch_latest(self.s.update_url)
         if not is_newer(info["version"], VERSION):

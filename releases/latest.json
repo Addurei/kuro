@@ -1,6 +1,6 @@
 {
-  "version": "1.0.3",
-  "zip": "kuro-1.0.3.zip",
-  "sha256": "1cfe6a3bdcdd7b2bb40db89c4031d5a76844a61a7eb7992f76a876dde138991d",
-  "notes": "Smoother blinks: eyelids sweep shut and ease open like a real cat's, with no fading or flicker. Kira's eyes close to her winged liner."
+  "version": "1.0.4",
+  "zip": "kuro-1.0.4.zip",
+  "sha256": "fbc16c2d7c673703605257c7127eec362d6bc4779abc68cf11d1439f21cb44b9",
+  "notes": "Smoother everywhere: even frame pacing, breathing and tail tempo that ease, expressions that blend instead of switching, a contented squint when he's happy. New face icons. Updates can never downgrade."
 }

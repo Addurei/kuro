@@ -166,3 +166,45 @@ def _round_trip(tmp_path, subprocess, sys):
     pending = U.stage_zip(dist / info["zip"], U.update_dir(tmp_path), info["version"])
     assert (pending / "main.py").is_file() and (pending / "app" / "updater.py").is_file()
     assert not list(pending.rglob("__pycache__"))
+
+
+def _staged(data: Path, version: str) -> None:
+    pend = data / "update" / "pending"
+    (pend / "app").mkdir(parents=True)
+    (pend / "app" / "version.py").write_text(f'VERSION = "{version}"')
+    (pend / "main.py").write_text("# from the update")
+    (pend / "UPDATE_VERSION").write_text(version)
+
+
+def _install(root: Path, version: str) -> None:
+    (root / "app").mkdir(parents=True)
+    (root / "app" / "version.py").write_text(f'VERSION = "{version}"')
+    (root / "main.py").write_text("# installed")
+
+
+def test_a_stale_staged_update_never_downgrades(tmp_path):
+    """Tonight's bug: an old process staged 1.0.1, the files on disk had moved
+    on to 1.0.3, and the restart put 1.0.1 back. Now it's discarded."""
+    root, data = tmp_path / "inst", tmp_path / "data"
+    _install(root, "1.0.3")
+    _staged(data, "1.0.1")
+    assert U.apply_pending(root, data) == ""
+    assert (root / "main.py").read_text() == "# installed"
+    assert not (data / "update" / "pending").exists()
+
+
+def test_a_developer_checkout_is_never_overwritten(tmp_path):
+    root, data = tmp_path / "inst", tmp_path / "data"
+    _install(root, "1.0.0")
+    (root / ".git").mkdir()
+    _staged(data, "9.9.9")
+    assert U.apply_pending(root, data) == ""
+    assert (root / "main.py").read_text() == "# installed"
+
+
+def test_a_real_update_still_applies(tmp_path):
+    root, data = tmp_path / "inst", tmp_path / "data"
+    _install(root, "1.0.3")
+    _staged(data, "1.0.4")
+    assert U.apply_pending(root, data) == "1.0.4"
+    assert (root / "main.py").read_text() == "# from the update"

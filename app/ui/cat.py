@@ -159,6 +159,9 @@ class CatWidget(QWidget):
         self.hop_y = 0.0
         self.hop_v = 0.0
         self.tail_phase = 0.0
+        self._tail_speed = 2.2           # eased, so the sway never changes tempo in one frame
+        self._breath_ph = 0.0            # breathing phase; its rate eases with sleepiness
+        self._expr_shown = ""            # an expression keeps showing while it fades out
         self.gait_phase = 0.0
         self._blink = -1.0
         self._blink_in = random.uniform(1.5, 4)
@@ -235,6 +238,7 @@ class CatWidget(QWidget):
     def react(self, expr: str, seconds: float = 2.0) -> None:
         """Show a special expression for a while: surprised, dizzy, love, annoyed."""
         self.expr = expr
+        self._expr_shown = expr
         self._expr_until = self.t + seconds
         if expr == "surprised":
             self.sp["ear"].kick(8)
@@ -433,20 +437,27 @@ class CatWidget(QWidget):
             self.hide()                      # fully faded: get out of the way
         speed = {"thinking": 5.0, "happy": 7.0, "sleeping": 1.0,
                  "listening": 3.0}.get(self.state, 2.2) + 3 * self.sp["gait"].value
-        self.tail_phase += dt * speed
+        self._tail_speed += (speed - self._tail_speed) * min(1.0, dt * 3.0)
+        self.tail_phase += dt * self._tail_speed
+        sleep_k = max(0.0, min(1.0, self.sp["sleep"].value))
+        self._breath_ph += dt * (2.4 - 1.1 * sleep_k * sleep_k * (3 - 2 * sleep_k))
         self.update()
 
     def _pace(self) -> None:
         """Frame rate by need. 60 fps only while he is really moving (dragged,
         flying, walking, hopping, being petted, a fast cursor to follow); 40
-        while he talks, reacts or blinks; 25 while he just sits and breathes;
-        15 asleep; 4 while hidden. Physics uses real elapsed time, so nothing
+        while he reacts, blinks or changes expression; 30 while he talks, thinks
+        or just sits and breathes; 15 asleep; 4 while hidden. Only rates that
+        divide 60 Hz evenly, so every frame is held for the same time (40 or
+        25 fps judder on a 60 Hz screen). Physics uses real elapsed time, so nothing
         changes speed, it only gets fewer (identical-looking) in-between frames."""
         fast = (self.mode != "rest" or self.hop_y > 0.5 or self._hop_pending is not None
                 or self._blink >= 0                  # blinks are quick: every frame counts
                 or self._cursor_speed > 400 or self._moving() or self._pet > 0.02)
+        e = self.sp["expr"]
         lively = (self._sparks or self._notes or self._scan_fade > 0 or self._action
-                  or self.expr or self.state in ("talking", "happy", "listening", "thinking")
+                  or self.expr or abs(e.value - e.target) > 0.01 or abs(e.vel) > 0.05
+                  or self.state in ("happy",)
                   or self._slow_blink_t >= 0 or self.sp["knead"].value > 0.05
                   or self.sp["mouth"].value > 0.03)
         if self.away:
@@ -454,11 +465,11 @@ class CatWidget(QWidget):
         elif fast:
             ms = 16
         elif lively:
-            ms = 25
+            ms = 16
         elif self.state == "sleeping" and self.t - self._doze_t0 > 4:
             ms = 66
         else:
-            ms = 40
+            ms = 33
         if ms != self._frame.interval():
             self._frame.setInterval(ms)
 
@@ -846,7 +857,7 @@ class CatWidget(QWidget):
         # taps follow your speed: ~1 paw press per 2 keys, capped so it stays cute
         self._knead_phase += dt * math.pi * min(9.0, max(2.5, rate * 0.9))
 
-    BLINK_S = 0.24     # one whole blink, shut and open again
+    BLINK_S = 0.27     # one whole blink, shut and open again
 
     @staticmethod
     def _blink_curve(u: float) -> float:
@@ -1299,7 +1310,7 @@ class CatWidget(QWidget):
         blink = self._blink_curve(self._blink) if self._blink >= 0 else 0.0
         chatter = max(0.0, min(1.0, sp["mouth"].value))
         sleep = sp["sleep"].value
-        breath = math.sin(t * (1.3 if sleep > 0.5 else 2.4)) * (1 + sleep)
+        breath = math.sin(self._breath_ph) * (1 + max(0.0, min(1.0, sleep)))
         # eyes: the nodding-off curve while asleep, the spring when waking up
         shut = self._doze_amount() if self.state == "sleeping" else max(0.0, min(1.0, sleep))
         pop = max(0.0, 1 - (t - self._pop_t) / 0.35)
@@ -1349,7 +1360,8 @@ class CatWidget(QWidget):
             sparkle=max(0.0, min(1.0, sp["sparkle"].value)),
             purr=max(0.0, min(1.0, sp["purr"].value)),
             lid=max(0.0, min(0.9, sp["lid"].value)),
-            expr=self.expr or ("vibe" if self.music else ""),
+            expr=self.expr or (self._expr_shown if sp["expr"].value > 0.02 else "")
+            or ("vibe" if self.music else ""),
             expr_amt=max(0.0, min(1.0, sp["expr"].value)),
             headphones=max(0.0, min(1.0, sp["phones"].value)),
             airborne=max(0.0, min(1.0, sp["air"].value)),

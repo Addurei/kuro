@@ -15,18 +15,41 @@
 
 #define AppVer GetEnv("KURO_VERSION") == "" ? "1.0.0" : GetEnv("KURO_VERSION")
 
+; Builds Kuro by default. A custom character (a CHARACTER.json, see README)
+; gets its own installer from this same script; nothing of it is in the repo:
+;   ISCC /DCatName=Mochi /DCatDir=C:\path\to\mochi /DCatIcon=mochi.ico kuro.iss
+; CatDir holds that character's CHARACTER.json and the character\ folder that
+; scripts\make_icon.py writes (its icon and installer art).
+#ifndef CatName
+  #define CatName "Kuro"
+#endif
+#ifdef CatDir
+  #ifndef CatIcon
+    #define CatIcon "icon.ico"
+  #endif
+  #define CatArt CatDir + "\character\installer"
+  #define CatIconSrc CatDir + "\character\" + CatIcon
+  #define CatIconInstalled "{app}\character\" + CatIcon
+#else
+  #define CatArt "art"
+  #define CatIconSrc "..\assets\icon.ico"
+  #define CatIconInstalled "{app}\assets\icon.ico"
+#endif
+
 [Setup]
-AppId=KuroDesktopCat
-AppName=Kuro
+AppId={#CatName}DesktopCat
+AppName={#CatName}
 AppVersion={#AppVer}
 AppPublisher=Drey
-DefaultDirName={userpf}\Kuro
+DefaultDirName={userpf}\{#CatName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=KuroSetup
-SetupIconFile=..\assets\icon.ico
-UninstallDisplayIcon={app}\assets\icon.ico
+OutputBaseFilename={#CatName}Setup
+SetupIconFile={#CatIconSrc}
+UninstallDisplayIcon={#CatIconInstalled}
+UninstallDisplayName={#CatName}
+WizardSmallImageFile={#CatArt}\small-55.bmp,{#CatArt}\small-64.bmp,{#CatArt}\small-83.bmp,{#CatArt}\small-110.bmp,{#CatArt}\small-138.bmp
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -41,20 +64,25 @@ Source: "..\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs; E
 Source: "..\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
 Source: "..\server\*"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs; Excludes: "__pycache__"
 Source: "..\scripts\slim.py"; DestDir: "{app}\scripts"; Flags: ignoreversion
+#ifdef CatDir
+; the custom character: who it is, and its own art (updates never touch these)
+Source: "{#CatDir}\CHARACTER.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#CatDir}\character\*"; DestDir: "{app}\character"; Flags: ignoreversion recursesubdirs; Excludes: "installer"
+#endif
 
 [Icons]
-Name: "{userprograms}\Kuro"; Filename: "{app}\run.bat"; WorkingDir: "{app}"; IconFilename: "{app}\assets\icon.ico"
-Name: "{userdesktop}\Kuro"; Filename: "{app}\run.bat"; WorkingDir: "{app}"; IconFilename: "{app}\assets\icon.ico"; Tasks: desktopicon
+Name: "{userprograms}\{#CatName}"; Filename: "{app}\run.bat"; WorkingDir: "{app}"; IconFilename: "{#CatIconInstalled}"
+Name: "{userdesktop}\{#CatName}"; Filename: "{app}\run.bat"; WorkingDir: "{app}"; IconFilename: "{#CatIconInstalled}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Run]
-Filename: "{app}\run.bat"; Description: "Start Kuro now (first start sets things up)"; Flags: postinstall nowait skipifsilent shellexec
+Filename: "{app}\run.bat"; Description: "Start {#CatName} now (first start sets things up)"; Flags: postinstall nowait skipifsilent shellexec
 
 [UninstallDelete]
 ; the Python environment and voices run.bat created
-Type: filesandordirs; Name: "{localappdata}\Kuro"
+Type: filesandordirs; Name: "{localappdata}\{#CatName}"
 
 [Code]
 const
@@ -82,7 +110,7 @@ end;
 procedure InitializeWizard;
 begin
   DownloadPage := CreateDownloadPage('Getting Python',
-    'Kuro runs on Python 3.12. It isn''t on this PC yet, so it''s being set up first.',
+    '{#CatName} runs on Python 3.12. It isn''t on this PC yet, so it''s being set up first.',
     @OnDownloadProgress);
 end;
 
@@ -111,8 +139,8 @@ begin
   end;
   if not Ok then
     SuppressibleMsgBox('Python 3.12 could not be set up automatically.' + #13#10 +
-      'Kuro will still be installed: get Python 3.12 from python.org' + #13#10 +
-      '(tick "Add python.exe to PATH"), then start Kuro.', mbInformation, MB_OK, IDOK);
+      '{#CatName} will still be installed: get Python 3.12 from python.org' + #13#10 +
+      '(tick "Add python.exe to PATH"), then start {#CatName}.', mbInformation, MB_OK, IDOK);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

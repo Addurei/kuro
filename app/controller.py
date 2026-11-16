@@ -148,11 +148,8 @@ class Controller(FeaturesMixin):
         self._last_suggest = 0.0
 
         # --- view side ---
-        from .character import CURRENT
-        icon_file = app_root() / "assets" / CURRENT["icon"]
-        if not icon_file.exists():
-            icon_file = app_root() / "assets" / "icon.png"
-        icon = QIcon(str(icon_file))
+        from .character import icon_path
+        icon = QIcon(str(icon_path(app_root())))
         app.setWindowIcon(icon)
         self.cat = CatWidget(settings.scale, can_wander=self._can_wander)
         self.cat.typing_rate = lambda: (self.typing.rate() if self.s.aware
